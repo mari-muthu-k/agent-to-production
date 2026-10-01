@@ -217,3 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 CLAUDE.md
+# Course site
+site/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+.claude/settings.local.json

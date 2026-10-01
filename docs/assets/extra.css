@@ -1,0 +1,12 @@
+/* Course-specific tweaks on top of Material for MkDocs. */
+
+/* Keep the "Open in Colab" badge from stretching to full width. */
+.md-typeset img[alt="Open In Colab"] {
+  vertical-align: middle;
+}
+
+/* Slightly tighter schedule tables. */
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td {
+  padding: 0.6em 1em;
+}

@@ -1,0 +1,85 @@
+site_name: Agent to Production - Hands-on
+site_description: A 4-day hands-on workshop on building an AI agent and shipping it to production.
+site_author: Mari Muthu K
+site_url: https://mari-muthu-k.github.io/agent-to-production/
+
+repo_name: mari-muthu-k/agent-to-production
+repo_url: https://github.com/mari-muthu-k/agent-to-production
+edit_uri: edit/main/docs/
+
+copyright: Course material for the "Agent to Production - Hands-on" workshop.
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - content.action.view
+
+extra_css:
+  - assets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Setup: setup.md
+  - Day 1: day1.md
+  - Day 2: day2.md
+  - Day 3: day3.md
+  - Day 4: day4.md
+  - Capstone: capstone.md
+  - Resources: resources.md
+  - FAQ: faq.md
