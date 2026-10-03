@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Placeholder logo: replace with the final course logo. -->
-  <rect x="4" y="4" width="56" height="56" rx="12" fill="#3f51b5"/>
-  <path d="M18 44 L32 18 L46 44" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="32" cy="36" r="4" fill="#ffffff"/>
-</svg>

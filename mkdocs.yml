@@ -11,10 +11,6 @@ copyright: Course material for the "Agent to Production - Hands-on" workshop.
 
 theme:
   name: material
-  logo: assets/logo.svg
-  favicon: assets/logo.svg
-  icon:
-    repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
