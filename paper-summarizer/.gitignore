@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+build/
+logs/*
+!logs/.gitkeep
+data/vectorstore/
+data/notes/
+# executed copies from `make exec-notebooks`
+build/executed/
+# your organisation's CA certificates (see certs/README.md)
+certs/*.crt

@@ -1,0 +1,33 @@
+# LiteLLM proxy (profile `gateway`). M0: forwarding, retries, fallback only; no database.
+# M3 adds Postgres (virtual keys, budgets, spend) and Redis (cache, rate-limit state).
+#
+# Upstream comes from .env (PROVIDER_*). Default upstream is mock-llm, so you can rehearse
+# the gateway fully offline. Clients call it with LLM_BASE_URL=http://gateway:4000/v1,
+# LLM_API_KEY=$LITELLM_MASTER_KEY and LLM_MODEL=paper-explainer.
+
+model_list:
+  - model_name: paper-explainer
+    litellm_params:
+      model: os.environ/PROVIDER_MODEL
+      api_base: os.environ/PROVIDER_BASE_URL
+      api_key: os.environ/PROVIDER_API_KEY
+  - model_name: paper-explainer-fallback
+    litellm_params:
+      model: os.environ/PROVIDER_FALLBACK_MODEL
+      api_base: os.environ/PROVIDER_BASE_URL
+      api_key: os.environ/PROVIDER_API_KEY
+  - model_name: paper-embed
+    litellm_params:
+      model: os.environ/PROVIDER_EMBED_MODEL
+      api_base: os.environ/PROVIDER_BASE_URL
+      api_key: os.environ/PROVIDER_API_KEY
+
+litellm_settings:
+  num_retries: 2            # the gateway is the only retry layer when apps call it
+  request_timeout: 60
+  fallbacks:
+    - paper-explainer: ["paper-explainer-fallback"]
+  drop_params: true         # drop params an upstream doesn't support instead of failing
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

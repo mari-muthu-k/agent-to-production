@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-agent"
+version = "0.1.0"
+description = "Research Paper Summarizer Agent: the 4-day workshop codebase"
+requires-python = ">=3.11,<3.12"
+# Direct dependencies only. Exact pins live in requirements.lock / requirements-dev.lock
+# (regenerate with `make lock`).
+dependencies = [
+    "openai",
+    "pydantic>=2",
+    "httpx",
+    "tiktoken",
+    "numpy",
+    "fastapi",      # mock-llm server now; the api service from Day 4
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "ipykernel",    # a kernel for tools/exec_notebooks.py (no Jupyter server: notebooks run in Colab)
+    "nbclient",     # tools/exec_notebooks.py
+    "nbformat",
+]
+
+[tool.setuptools.packages.find]
+include = ["paper_agent*", "mock_llm*"]
+
+[tool.setuptools.package-data]
+paper_agent = ["prompts/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["notebooks", "data", "logs", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E701",    # `for x in y: print(x)` one-liners, kept from the Day 1 notebook
+    "UP007",   # Optional[X] kept as written in the Day 1 notebook
+    "UP045",
+    "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ported verbatim from the Day 1 notebook; drift tests compare them with the notebook text.
+"paper_agent/llm_client.py" = ["UP006", "UP035"]
+"paper_agent/fixtures/tinycoder.py" = ["E501"]
+"paper_agent/explain.py" = ["E501"]

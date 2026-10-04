@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.git
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.ipynb_checkpoints
+*.egg-info
+logs/
+data/vectorstore/
+build/
+notebooks/**/llm_client.py

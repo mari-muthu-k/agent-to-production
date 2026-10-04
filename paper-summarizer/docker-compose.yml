@@ -1,0 +1,107 @@
+name: paper-summarizer
+
+# Offline vs online: LLM_BASE_URL in .env is the only switch.
+#   http://mock-llm:8000/v1   -> mock-llm (no keys, no cost)
+#   https://<gateway>/v1       -> a real OpenAI-compatible endpoint
+#   http://gateway:4000/v1     -> the local LiteLLM proxy (`make gateway`)
+
+x-dev-image: &dev-image
+  build:
+    context: .
+    target: dev
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  image: paper-summarizer-dev:latest
+
+x-proxy-env: &proxy-env
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mock-llm,gateway,api,postgres,redis}
+
+services:
+  mock-llm:
+    build:
+      context: .
+      target: runtime
+    image: paper-summarizer-runtime:latest
+    environment:
+      MOCK_BASE_LATENCY_MS: ${MOCK_BASE_LATENCY_MS:-20}
+      MOCK_TOKEN_LATENCY_MS: ${MOCK_TOKEN_LATENCY_MS:-2}
+    ports:
+      - "${MOCK_PORT:-8100}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  # Notebooks are run in Google Colab, so there is no Jupyter server here. The dev image only
+  # provides a kernel so tests and `make exec-notebooks` can execute the notebooks headlessly.
+
+  toolbox:
+    # One-shot commands that should use YOUR .env (e.g. `make check-gateway` against a real endpoint).
+    <<: *dev-image
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *proxy-env
+    volumes:
+      - ./:/workspace
+    command: ["python", "tools/check_gateway.py"]
+
+  tests:
+    <<: *dev-image
+    profiles: ["tools"]
+    # Tests never need real keys: everything points at mock-llm, whatever .env says.
+    environment:
+      LLM_BASE_URL: http://mock-llm:8000/v1
+      LLM_API_KEY: sk-mock-local
+      LLM_MODEL: mock-llm
+      LLM_FALLBACK_MODEL: mock-llm-fallback
+      EMBED_MODEL: mock-embed
+      MOCK_BASE_URL: http://mock-llm:8000
+      NO_PROXY: localhost,127.0.0.1,mock-llm
+      NOTEBOOKS_DIR: /notebooks
+    volumes:
+      - ./:/workspace
+      - ../notebooks:/notebooks     # the Colab notebooks live at the course repo root
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+    command: ["pytest", "-q"]
+
+  gateway:
+    # LiteLLM proxy. Optional rehearsal service until M3 (Day 4), when it becomes core.
+    image: ghcr.io/berriai/litellm:v1.103.2
+    profiles: ["gateway"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *proxy-env
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-change-me}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://mock-llm:8000/v1}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-sk-mock-local}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-openai/mock-llm}
+      PROVIDER_FALLBACK_MODEL: ${PROVIDER_FALLBACK_MODEL:-openai/mock-llm-fallback}
+      PROVIDER_EMBED_MODEL: ${PROVIDER_EMBED_MODEL:-openai/mock-embed}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./gateway/litellm_config.yaml:/app/config.yaml:ro
+    ports:
+      - "${GATEWAY_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+    restart: unless-stopped
