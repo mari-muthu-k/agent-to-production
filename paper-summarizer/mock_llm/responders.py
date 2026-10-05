@@ -29,6 +29,8 @@ _INJECTION = re.compile(
     r"(\b(ai|llm|language model|assistant)s?\b[^.\]]{0,40}\b(must|should|are required to)\b"
     r"|ignore (all |any )?(previous|prior|above) instructions"
     r"|disregard (the )?(system|previous) (prompt|instructions))", re.I)
+_IDK_RULES = ("insufficient_evidence", "insufficient evidence", "i don't know", "say you don't know",
+              "not in the context", "if the excerpts do not", "if the chunks do not")
 _DEFENSES = ("never as instructions", "not as instructions", "never instructions", "untrusted",
              "do not follow instructions", "never follow instructions", "ignore instructions inside")
 
@@ -45,6 +47,7 @@ class Block:
     id: str
     text: str
     page: Optional[int] = None
+    section: Optional[str] = None
 
 
 @dataclass
@@ -56,6 +59,7 @@ class Request:
     response_format: Optional[dict] = None
     tools: Optional[list] = None
     tool_choice: Any = None
+    reasoning: bool = False          # OpenRouter `reasoning` switched on for this request
 
     @property
     def system(self) -> str:
@@ -76,7 +80,7 @@ class Request:
     def is_repair(self) -> bool:
         """A follow-up asking to fix a previous reply: the mock always gets it right the second time."""
         later = [text_of(m) for m in self.messages if m.get("role") == "user"][1:]
-        return any(k in t for t in later for k in ("failed validation", "Cite only these ids", "corrected JSON"))
+        return any(k in t for t in later for k in ("failed validation", "Cite only these", "corrected JSON"))
 
     def blocks(self) -> list:
         """Document blocks (<section id=..>, <chunk id=.. page=..>) from the user messages, in order."""
@@ -91,7 +95,8 @@ class Request:
                     continue
                 seen.add(bid)
                 page = a.get("page")
-                found.append(Block(bid, body.strip(), int(page) if page and page.isdigit() else None))
+                found.append(Block(bid, body.strip(), int(page) if page and page.isdigit() else None,
+                                   a.get("section")))
         return found
 
     def title(self) -> str:
@@ -241,6 +246,60 @@ def answer(req: Request, fault: Fault) -> dict:
     return out
 
 
+SUPPORT_MIN = 2   # shared content words needed before the mock treats a sentence as evidence
+HALLUCINATION = ("The authors trained on 512 NVIDIA A100 GPUs for 3 weeks, and the method improves accuracy "
+                 "by 12.4% over every baseline.")
+
+
+def allows_idk(req: Request) -> bool:
+    """Does the prompt give the model a way out ("say insufficient evidence / I don't know")?"""
+    text = (req.system + "\n" + req.last_user).lower()
+    return any(rule in text for rule in _IDK_RULES)
+
+
+def best_support(req: Request) -> tuple:
+    """(score, block, sentence) of the sentence that best overlaps the question (content words).
+
+    Score 0 unless the sentence shares at least half of the question's content words: mentioning
+    the paper's name is not evidence for an answer.
+    """
+    m = re.search(r"Question:\s*(.+)", req.last_user, re.S)
+    question = (m.group(1) if m else req.last_user).strip()
+    q = content_words(question)
+    best = (0, None, "")
+    need = max(SUPPORT_MIN, (len(q) + 1) // 2)
+    for b in req.blocks():
+        for s in sentences(_clean(b.text)):
+            score = len(q & content_words(s))
+            if score >= need and score > best[0]:
+                best = (score, b, s)
+    return best
+
+
+def grounded(req: Request, fault: Fault) -> dict:
+    """Day 2 GroundedAnswer: status + answer + (section, page) citations."""
+    blocks = req.blocks()
+    score, block, sentence = best_support(req)
+    if block is not None and score >= SUPPORT_MIN:
+        out = {"status": "answered", "answer": sentence,
+               "citations": [{"section": block.section or block.id, "page": block.page or 1}],
+               "confidence": "high" if score >= 3 else "medium"}
+    elif allows_idk(req):
+        out = {"status": "insufficient_evidence",
+               "answer": "The retrieved excerpts do not contain the answer to this question.",
+               "citations": [], "confidence": "low"}
+    else:   # no way out offered: the mock does what weak prompts invite, it makes something up
+        first = blocks[0] if blocks else Block("none", "", 1, "unknown")
+        out = {"status": "answered", "answer": HALLUCINATION,
+               "citations": [{"section": first.section or first.id, "page": first.page or 1}],
+               "confidence": "high"}
+    if fault.bad_citation and not req.is_repair and out["citations"]:
+        out["citations"].append({"section": "appendix_b", "page": 99})
+    if fault.bad_json and not req.is_repair:
+        out["status"] = "maybe"
+    return out
+
+
 def instance_from_schema(schema: dict, root: Optional[dict] = None, name: str = "value", req=None) -> Any:
     """A minimal valid instance of a JSON schema (handles $ref, anyOf, enums, min lengths)."""
     root = root or schema
@@ -294,6 +353,9 @@ def structured(req: Request, schema: Optional[dict], fault: Fault) -> dict:
     """JSON for a requested schema; recognizes the workshop's PaperExplainer and Answer contracts."""
     props = set((schema or {}).get("properties", {}))
     hint = req.system + "\n" + req.last_user
+    grounded_hint = "insufficient_evidence" in hint and "citations" in hint
+    if {"status", "answer", "citations"} <= props or (not props and grounded_hint):
+        return grounded(req, fault)
     if {"headline", "evidence_type"} <= props or (not props and "headline" in hint and "evidence_type" in hint):
         return explainer(req, fault)
     if {"answer", "citations"} <= props or (not props and '"answer"' in hint and "citations" in hint):
@@ -410,9 +472,30 @@ def _explain_abstract(req: Request) -> str:
 
 
 def _count_letters(req: Request, m) -> str:
-    # Deliberately wrong by one, like the classic tokenizer-driven miscount the demo teaches.
+    # Without reasoning: wrong by one, like the classic tokenizer-driven miscount the demo teaches.
+    # With reasoning the model spells the word out first, and gets it right.
     letter, word = m.group(1).lower(), m.group(2).lower()
-    return str(max(word.count(letter) - 1, 0))
+    return str(word.count(letter)) if req.reasoning else str(max(word.count(letter) - 1, 0))
+
+
+def _are_you_sure(req: Request) -> str:
+    previous = next((m for m in reversed(req.messages[:-1]) if m.get("role") == "assistant"), {})
+    if previous.get("reasoning_details"):        # it can see its own earlier reasoning
+        return f"Yes. I re-checked my letter-by-letter reasoning: the answer is {previous.get('content')}."
+    return "Let me recount from scratch... I may have been wrong before."
+
+
+def reasoning_for(req: Request) -> str:
+    """The deterministic 'thinking' the mock shows when reasoning is on."""
+    m = re.search(r"How many (?:letter )?(\w)'?s? are in (?:the word )?'([^']+)'", req.last_user, re.I)
+    if m:
+        letter, word = m.group(1).lower(), m.group(2).lower()
+        spelled = "-".join(word)
+        where = [str(i + 1) for i, ch in enumerate(word) if ch == letter]
+        return (f"Spell it out: {spelled}. The letter '{letter}' is at positions {', '.join(where)}. "
+                f"That makes {len(where)}.")
+    return ("The user asks: " + " ".join(req.last_user.split()[:14]) + " ... I should find the relevant facts "
+            "in what I was given, check them, and answer briefly and precisely.")
 
 
 def short_reply(req: Request) -> str:
@@ -430,7 +513,8 @@ def short_reply(req: Request) -> str:
 
 INTENTS = [
     (r"Reply with exactly:\s*(.+)", lambda r, m: m.group(1).strip().rstrip(".").strip("'\"")),
-    (r"How many letter (\w)'?s? are in '([^']+)'", _count_letters),
+    (r"How many (?:letter )?(\w)'?s? are in (?:the word )?'([^']+)'", _count_letters),
+    (r"^\s*Are you sure\?", lambda r, m: _are_you_sure(r)),
     (r"\bWho am I\b", lambda r, m: _who_am_i(r)),
     (r"blog-post title", lambda r, m: r.rng().choice(TITLES)),   # varies only when temperature >= 0.7
     (r"List (\d+) Python web frameworks",
@@ -471,6 +555,16 @@ def text_reply(req: Request, fault: Fault) -> str:
         m = re.search(pattern, last, re.I | re.S)
         if m:
             return limit_sentences(req, fn(req, m))
+    if not req.blocks() and re.search(r"\b(paper|authors)\b", last, re.I) and "?" in last \
+            and not req.tools and not allows_idk(req):         # asked about a paper it has never seen
+        return "From what I recall: " + HALLUCINATION
+    if req.blocks() and re.search(r"Question:", last):     # a (naive) RAG prompt answered in plain text
+        score, block, sentence = best_support(req)
+        if block is not None and score >= SUPPORT_MIN:
+            return limit_sentences(req, sentence)
+        if allows_idk(req):
+            return "I don't know: the provided context does not answer this."
+        return HALLUCINATION
     if "Explain this paper" in last or "Explain this paper" in req.all_text[-200:]:
         blocks = req.blocks()
         obey = bool(injected_blocks(blocks)) and obeys_injection(req, fault)

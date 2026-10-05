@@ -1,0 +1,25 @@
+{
+  "repo_raw": "https://raw.githubusercontent.com/mari-muthu-k/agent-to-production/main/paper-summarizer/data/papers",
+  "papers": [
+    {"id": "mistral-7b", "file": "mistral-7b.pdf", "arxiv": "2310.06825v1",
+     "title": "Mistral 7B",
+     "authors": "Albert Q. Jiang, Alexandre Sablayrolles, Arthur Mensch, et al. (18 authors)",
+     "license": "CC BY 4.0", "pages": 9,
+     "sha256": "dfbac4e7035344b305c947481f2e7e8a02f7a24a563917eb6e47f6591d14c5ae"},
+    {"id": "ragas", "file": "ragas.pdf", "arxiv": "2309.15217v2",
+     "title": "Ragas: Automated Evaluation of Retrieval Augmented Generation",
+     "authors": "Shahul Es, Jithin James, Luis Espinosa-Anke, Steven Schockaert",
+     "license": "CC BY 4.0", "pages": 8,
+     "sha256": "6c24762a3f277fd120ed1adf34b01420ecf92f18ff6d1b5435fa0a09cb804ecb"},
+    {"id": "vllm", "file": "vllm.pdf", "arxiv": "2309.06180v1",
+     "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+     "authors": "Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, et al. (9 authors)",
+     "license": "CC BY 4.0", "pages": 16,
+     "sha256": "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e"},
+    {"id": "dense-x", "file": "dense-x.pdf", "arxiv": "2312.06648v3",
+     "title": "Dense X Retrieval: What Retrieval Granularity Should We Use?",
+     "authors": "Tong Chen, Hongwei Wang, Sihao Chen, et al. (8 authors)",
+     "license": "CC BY 4.0", "pages": 19,
+     "sha256": "307d756e825845e1b8c60306151c5c53d95d025d5352e3afd22030208911d3d1"}
+  ]
+}

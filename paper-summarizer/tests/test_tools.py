@@ -15,7 +15,7 @@ def load(name):
 def test_check_gateway_all_ok_against_mock(mock):
     cg = load("check_gateway")
     results = {r.name: r for r in cg.run_checks(mock.client(), "mock-llm", "mock-embed")}
-    bad = {n: r.detail for n, r in results.items() if r.status != "ok"}
+    bad = {n: r.detail for n, r in results.items() if r.status not in ("ok", "skipped")}
     assert not bad
     assert "404" in results["unknown model"].detail
     assert cg.recommendations(list(results.values())) == []
@@ -30,5 +30,22 @@ def test_check_gateway_reports_max_tokens_quirk(mock):
     assert any("max_completion_tokens" in r for r in cg.recommendations(results))
 
 
-def test_build_notebooks_verifies_day1_checksums():
-    assert load("build_notebooks").build_day1(None) == 0
+def test_generated_notebooks_match_templates():
+    """notebooks/day2+ must be regenerated (`make notebooks`) after editing notebook_templates/."""
+    bn = load("build_notebooks")
+    stale = [str(p) for p, builder in bn.targets() if not p.exists() or p.read_text() != bn.render(builder)]
+    assert not stale, f"run `make notebooks`: {stale}"
+
+
+def test_generated_practice_follows_conventions():
+    import json
+    bn = load("build_notebooks")
+    for path, _ in bn.targets():
+        if path.name != "Practice.ipynb":
+            continue
+        cells = json.loads(path.read_text())["cells"]
+        tags = [t for c in cells for t in c["metadata"].get("tags", [])]
+        assert 1 <= tags.count("todo") <= 3 and tags.count("todo") == tags.count("todo-test") == tags.count("rescue")
+        assert tags.count("catch-up") >= 2
+        text = "".join("".join(c["source"]) for c in cells)
+        assert "Cheatsheet" in text and "Extensions (homework)" in text and "Tomorrow" in text

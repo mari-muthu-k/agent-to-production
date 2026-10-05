@@ -6,33 +6,42 @@ build-backend = "setuptools.build_meta"
 name = "paper-agent"
 version = "0.1.0"
 description = "Research Paper Summarizer Agent: the 4-day workshop codebase"
-requires-python = ">=3.11,<3.12"
-# Direct dependencies only. Exact pins live in requirements.lock / requirements-dev.lock
-# (regenerate with `make lock`).
+requires-python = ">=3.11"   # Docker uses 3.11; Colab runs a newer Python
+# Direct dependencies only, with ranges wide enough for Colab's preinstalled packages.
+# Exact pins for Docker live in requirements.lock / requirements-dev.lock (`make lock`).
 dependencies = [
-    "openai",
-    "pydantic>=2",
+    "openai>=1.40",
+    "pydantic>=2.7",
     "httpx",
     "tiktoken",
     "numpy",
-    "fastapi",      # mock-llm server now; the api service from Day 4
-    "uvicorn",
 ]
 
 [project.optional-dependencies]
+rag = [                          # Day 2
+    "pdfplumber>=0.11",          # MIT; gives per-character font/colour, used for hidden-text checks
+    "langchain-text-splitters>=0.3",
+    "chromadb>=1.0",
+]
+mock = [                         # mock-llm server (and the Day 4 api service)
+    "fastapi",
+    "uvicorn",
+]
 dev = [
+    "paper-agent[rag,mock]",
     "pytest",
     "ruff",
     "ipykernel",    # a kernel for tools/exec_notebooks.py (no Jupyter server: notebooks run in Colab)
     "nbclient",     # tools/exec_notebooks.py
     "nbformat",
+    "reportlab",    # tools/make_edge_case_pdfs.py
 ]
 
 [tool.setuptools.packages.find]
 include = ["paper_agent*", "mock_llm*"]
 
 [tool.setuptools.package-data]
-paper_agent = ["prompts/*.txt"]
+paper_agent = ["prompts/*.txt", "fixtures/pdfs/*.pdf", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,3 +66,5 @@ ignore = [
 "paper_agent/llm_client.py" = ["UP006", "UP035"]
 "paper_agent/fixtures/tinycoder.py" = ["E501"]
 "paper_agent/explain.py" = ["E501"]
+# Notebook text (markdown tables, cell code) is laid out for the rendered notebook, not for 120 columns.
+"notebook_templates/*" = ["E501"]

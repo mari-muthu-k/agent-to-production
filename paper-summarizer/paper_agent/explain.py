@@ -46,7 +46,7 @@ def explain_paper(llm: LLMClient, section_ids=None, max_tokens: int = 900,
     except CitationError as e:
         logger.warning(f"citation check failed, repairing once: {e}")
         repair = messages + [
-            {"role": "assistant", "content": result.model_dump_json()},
+            llm.last_message or {"role": "assistant", "content": result.model_dump_json()},   # keeps reasoning_details
             {"role": "user", "content": f"{e}. Cite only these ids: {section_ids}. Reply with ONLY the corrected JSON."},
         ]
         result = llm.chat_structured(repair, PaperExplainer, max_tokens=max_tokens)

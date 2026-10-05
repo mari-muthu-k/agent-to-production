@@ -35,22 +35,23 @@ class Spec:
     todo_tests: list = field(default_factory=list)        # markers of cells allowed to fail when unsolved
     solutions: list = field(default_factory=list)         # (marker, fn(source, nb) -> solved source)
     solved_must_print: list = field(default_factory=list)
-    catch_up_marker: str = "⏩"
 
 
 def _day1_solution_cell(src: str, nb) -> str:
-    return next(c.source for c in nb.cells if "# 🆘 SOLUTION VERSION" in c.source)
+    marker = r"%%writefile llm_client.py\n# (🆘 )?SOLUTION VERSION"
+    return [c.source for c in nb.cells if re.match(marker, c.source)][-1]
 
 
 def _day1_todo3(src: str, nb) -> str:
-    return re.sub(r"unknown = \[\]\s+# ✏️ TODO 3.*", "unknown = set(result.citations) - set(allowed_ids)", src)
+    return re.sub(r"unknown = \[\]\s+# (✏️ )?TODO 3.*", "unknown = set(result.citations) - set(allowed_ids)", src)
 
 
 SPECS = {
     "day1/Practice.ipynb": Spec(
         todo_tests=["✅ TODO 1: backoff grows"],
-        solutions=[("%%writefile llm_client.py\n\"\"\"", _day1_solution_cell), ("✏️ TODO 3", _day1_todo3)],
-        solved_must_print=["✅ TODO 1", "✅ TODO 2", "✅ TODO 3"],
+        solutions=[("%%writefile llm_client.py\n\"\"\"", _day1_solution_cell), ("unknown = []", _day1_todo3)],
+        # TODO 3's cell prints "TODO 3: <error>" when solved and "TODO 3: appendix_b was not caught" when not
+        solved_must_print=["✅ TODO 1", "✅ TODO 2", "TODO 3: cites sections that were not provided"],
     ),
     "day1/Demo.ipynb": Spec(),
 }
@@ -87,8 +88,8 @@ def is_todo_test(cell, spec: Spec) -> bool:
 
 
 def is_catch_up(cell, spec: Spec) -> bool:
-    return "catch-up" in tags(cell) or (is_code(cell) and "CATCH-UP" in cell.source
-                                        and spec.catch_up_marker in cell.source)
+    first = cell.source.lstrip().splitlines()[0] if cell.source.strip() else ""
+    return "catch-up" in tags(cell) or (is_code(cell) and first.startswith("#") and "CATCH-UP" in first)
 
 
 def execute(nb, label: str, rel: str):
@@ -152,20 +153,23 @@ def run_notebook(rel: str) -> list:
 
     solved_nb = solve(nb, spec)
 
+    must_print = spec.solved_must_print or [f"✅ TODO {i}" for i in
+                                            range(1, sum("todo" in tags(c) for c in nb.cells) + 1)]
+
     def solved():
         executed, errors = execute(copy.deepcopy(solved_nb), f"{rel.replace('/', '-')[:-6]}-solved", rel)
         text = printed(executed)
-        missing = [m for m in spec.solved_must_print if m not in text]
-        if errors or missing or "❌ TODO" in text:
+        missing = [m for m in must_print if m not in text]
+        if errors or missing or "❌ TODO" in text or "was not caught" in text:
             return False, (describe(errors) + f" missing={missing}").strip()
-        return True, "0 errors, " + ", ".join(spec.solved_must_print)
+        return True, "0 errors, " + ", ".join(must_print)
     record("solved", solved)
 
     for i, cell in enumerate(solved_nb.cells):
         if not is_catch_up(cell, spec):
             continue
         name = re.search(r"(\d+\.0) CATCH-UP", cell.source)
-        label = f"catch-up {name.group(1) if name else i} -> end"
+        label = f"catch-up {name.group(1) if name else f'cell {i}'} -> end"
 
         def from_catch_up(i=i, label=label):
             sub = copy.deepcopy(solved_nb)

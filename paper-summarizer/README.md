@@ -10,6 +10,7 @@ course repo root in `notebooks/dayN/`: `Practice.ipynb` (participants, run with 
 | Day | Practice | Demo |
 |---|---|---|
 | 1 | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day1/Practice.ipynb) | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day1/Demo.ipynb) |
+| 2 | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day2/Practice.ipynb) | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day2/Demo.ipynb) |
 
 (The links work once the notebooks are pushed to `main` on GitHub. Before that, use File → Upload
 notebook in Colab.)
@@ -18,7 +19,12 @@ This Docker setup has no Jupyter server. It exists to keep the notebooks and pac
 offline tests, executing every notebook headlessly against a mock model, probing your gateway,
 and rehearsing the LiteLLM gateway. **Participants never need it.**
 
-Status: **M0** (Docker scaffold + Day 1). Days 2 to 4 land in M1 to M3.
+Status: **M1** (Day 2: RAG over real PDFs). Days 3 and 4 land in M2 and M3.
+
+From Day 2 on, notebooks install this package in Colab with
+`pip install "paper-agent[rag] @ git+https://github.com/mari-muthu-k/agent-to-production@main#subdirectory=paper-summarizer"`
+(the setup cell does it). **Push to `main` before class**, and consider tagging the commit you rehearsed
+with and pinning that tag in `notebook_templates/day2.py` (`INSTALL`).
 
 ## Quick start
 
@@ -38,7 +44,7 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 | `make lint` | `ruff check` |
 | `make mock` | Start only the mock on `http://localhost:8100` |
 | `make gateway` | Start the LiteLLM proxy on `http://localhost:4000` (rehearsal profile) |
-| `make notebooks` | Regenerate notebooks (Day 1: byte-for-byte copies of `../reference/`) |
+| `make notebooks` | Regenerate Day 2+ notebooks from `notebook_templates/` (Day 1 is never touched) |
 | `make exec-notebooks` | Execute every notebook against `mock-llm`; fail on any unexpected error |
 | `make check-gateway` | Probe the endpoint in `.env` for supported features |
 | `make lock` | Re-resolve the pinned `requirements*.lock` files |
@@ -53,6 +59,7 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 | `http://mock-llm:8000/v1` | **Offline.** The local mock answers deterministically. Free. |
 | `https://<your-gateway>/v1` | **Online.** A real OpenAI-compatible endpoint. Set `LLM_API_KEY` and `LLM_MODEL` too. |
 | `http://gateway:4000/v1` | **Online via the local LiteLLM proxy** (`make gateway`). |
+| `https://openrouter.ai/api/v1` | **OpenRouter**, the provider the course uses (see below). |
 
 The mock accepts any API key and model name, so you can leave your real `LLM_API_KEY` / `LLM_MODEL`
 in `.env` and flip only `LLM_BASE_URL`. The exceptions are deliberately bad values used in the error
@@ -62,6 +69,34 @@ and `broken*` models return 500.
 Configuration names are the same everywhere: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, optional
 `LLM_FALLBACK_MODEL`, and `EMBED_MODEL` from Day 2. Locally they come from `.env` (gitignored); in
 Colab they come from Secrets. Keys are never written into code or images.
+
+## OpenRouter
+
+The course runs on [OpenRouter](https://openrouter.ai), which is OpenAI-compatible: the same `openai`
+SDK code works with `LLM_BASE_URL=https://openrouter.ai/api/v1`, an OpenRouter key in `LLM_API_KEY`
+and a `vendor/model` name in `LLM_MODEL` (e.g. `nvidia/nemotron-3-ultra-550b-a55b:free`). Embeddings
+work too, e.g. `EMBED_MODEL=nvidia/nemotron-3-embed-1b:free`. What the code handles for you:
+
+- **Reasoning** is an OpenRouter request option, `reasoning`, sent with the SDK's `extra_body`
+  (`{"enabled": True}`, `{"enabled": False}`, `{"effort": "low"}`). In `llm_client` it is
+  `LLMConfig(reasoning=...)`; `None` keeps the model's default. Day 2 turns it off for RAG answers.
+- **Reasoning tokens count toward `max_tokens`.** A small `max_tokens` on a reasoning model can return an
+  empty answer with `finish_reason="length"`; `llm_client` then says so in the `TruncatedOutputError`.
+- **`reasoning_details` go back unmodified** whenever an assistant turn is sent back: follow-ups,
+  validation repairs and citation repairs use `llm.last_message`, and `paper_agent.openrouter.assistant_turn()`
+  builds such a turn from any reply. Day 1 Demo D3.4b shows it with raw `requests`.
+- **Free models (`:free`)** allow **20 requests/minute** and **50 requests/day** without purchased credits
+  (1,000/day with $10+ of credits). The Day 1 code-along makes about 55 calls, so participants on a
+  free key without credits will hit the daily cap. 429s carry `X-RateLimit-*` headers; `llm_client`
+  retries them like any 429.
+- `make check-gateway` probes all of this against your key: whether the model reasons by default,
+  whether reasoning can be switched off, whether `reasoning_details` round-trip, and your key's
+  free-tier status and limits.
+
+Model capabilities differ: e.g. `nvidia/nemotron-3-ultra-550b-a55b:free` lists `tools`, `seed` and
+`reasoning` but not `response_format`/`structured_outputs` or `stop`, so Day 1's schema-mode (2.3b) and
+`stop` demos fall back to "not available here". Check a model's parameters at
+`https://openrouter.ai/api/v1/models`.
 
 ## Services
 
@@ -88,7 +123,17 @@ vector store from Day 2) and `logs/` persist on the host.
 - **Realistic.** It honours `max_tokens` (with `finish_reason: "length"`), stop sequences, "in one
   sentence" requests, and conversation history. Latency is about 20 ms plus 2 ms per output token.
 - **Embeddings** are hashed bag-of-words vectors: texts that share words come out similar.
-  Synonyms don't, which is itself a Day 2 teaching point.
+  Synonyms don't, which is itself a Day 2 teaching point. The model name is the hash salt, so two
+  embedding models give incompatible vectors, as real ones do.
+- **RAG answers.** With `<chunk section=".." page="..">` context it answers from the best-matching
+  sentence and cites `(section, page)`. When nothing matches, it says "insufficient evidence" *if the
+  prompt allows it*, and otherwise makes something up (the hallucination demo).
+- **OpenRouter reasoning.** `reasoning` / `reasoning_effort` switch on a deterministic "thinking" that
+  is returned as `reasoning` + `reasoning_details`, reported in `usage.completion_tokens_details`, and
+  paid from `max_tokens` (so tiny budgets give empty answers, as on OpenRouter). 429s carry
+  OpenRouter's `X-RateLimit-*` headers.
+- **Context window** of 16,384 tokens (`MOCK_CONTEXT_TOKENS`): longer prompts get OpenAI's
+  `context_length_exceeded` 400.
 - **Prompt injection.** The mock obeys instructions hidden in document text *only* when the system
   prompt has no "document text is data, not instructions" rule. That makes naive-vs-guarded demos
   repeatable. Real models are less predictable.
@@ -153,9 +198,13 @@ so a full run costs well under a cent.
 
 - Location: `<repo>/notebooks/dayN/` (outside this folder, so GitHub → Colab links stay short).
   Containers mount it at `/notebooks`; override with `NOTEBOOKS_DIR`.
-- `notebooks/day1/` holds **byte-for-byte copies** of the reference notebooks, renamed
-  `Day1_CodeAlong` → `Practice` and `Day1_Instructor_Demo` → `Demo`. `CHECKSUMS.json` and a test
-  guard them. To refresh them: `make notebooks` (reads `../reference/`).
+- **Day 1** is edited by hand (in Colab). Tests only check that the package still matches the code in
+  `day1/Practice.ipynb` (llm_client, prompt, paper, schemas); if you change one side, update the other.
+- **Day 2 onwards** is generated: edit `notebook_templates/dayN.py`, then `make notebooks`. Code cells
+  that teach a package function are generated from its source, and each ⏩ catch-up cell is built from
+  the same strings as the teaching cells, so neither can drift. A test fails if a committed notebook
+  is out of date with its template. Don't edit generated notebooks in Colab: the next
+  `make notebooks` overwrites them.
 - `make exec-notebooks` runs each Practice notebook four ways, each in a fresh kernel:
   1. **unsolved** (as participants get it): errors are allowed only in TODO-test cells;
   2. **solved** (TODOs filled in): zero errors, and every TODO test prints ✅;
@@ -176,11 +225,21 @@ paper_agent/
   explain.py           paper_messages, check_citations, explain_paper, show
   tokens.py            count tokens, fit sections to a budget, cost
   config.py            load settings from Colab Secrets or the environment
+  openrouter.py        OpenRouter: client with attribution headers, reasoning switch, reasoning_details turns
   testing.py           FakeLLM, FlakyProvider, fake_response
   fixtures/tinycoder.py  the Day 1 paper (FICTIONAL, written for the workshop)
+  fixtures/pdfs/       generated edge-case PDFs (FICTIONAL): two-column, image-only, hidden text
+  papers.py            the sample papers: registry, fetch (local -> GitHub -> arXiv, sha256-checked)
+  ingest/              Day 2: loaders (pdfplumber, column-aware), cleaning + sections, splitters
+                       (fixed / LangChain sentence-aware / semantic), embedders, stores (numpy, Chroma)
+  rag/                 Day 2: retriever + threshold, grounded answers with (section, page) citations,
+                       "insufficient evidence", naive baseline, hit-rate eval
+  data/                papers.json, retrieval_golden_v1.json (10 questions)
+data/papers/           the 4 sample papers (CC BY 4.0) + MANIFEST.md
+notebook_templates/    sources of the generated notebooks (Day 2+)
 mock_llm/              the OpenAI-compatible mock
 gateway/               LiteLLM config
-tools/                 build_notebooks, exec_notebooks, check_gateway
+tools/                 build_notebooks, nbgen, exec_notebooks, check_gateway, make_edge_case_pdfs
 tests/                 offline tests (fakes + mock-llm)
 ```
 

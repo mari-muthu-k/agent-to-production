@@ -15,8 +15,11 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 
+import httpx
 import openai
 from openai import OpenAI
+
+from paper_agent.openrouter import assistant_turn, is_openrouter, make_client, reasoning_tokens
 
 PROBE = [{"role": "user", "content": "Reply with exactly: ready"}]
 
@@ -37,6 +40,7 @@ def _err(e: Exception) -> str:
 
 def run_checks(client: OpenAI, model: str, embed_model) -> list:
     results: list = []
+    state: dict = {}
     tok = {"max_tokens": 40}
 
     def check(name):
@@ -74,7 +78,10 @@ def run_checks(client: OpenAI, model: str, embed_model) -> list:
         r = create(**tok)
         u = r.usage
         usage = f"usage {u.prompt_tokens} in / {u.completion_tokens} out" if u else "NO usage returned"
-        return "ok", f"{r.choices[0].message.content!r}, finish_reason={r.choices[0].finish_reason}, {usage}"
+        thinking = reasoning_tokens(u)
+        note = f", {thinking} of them reasoning (on by default!)" if thinking else ""
+        status = "ok" if r.choices[0].message.content else "error"
+        return status, f"{r.choices[0].message.content!r}, finish_reason={r.choices[0].finish_reason}, {usage}{note}"
 
     @check(f"{param} enforced")
     def _():
@@ -161,6 +168,34 @@ def run_checks(client: OpenAI, model: str, embed_model) -> list:
         ttft = f"{(first - t) * 1000:.0f} ms" if first else "n/a"
         return "ok", f"{len(parts)} chunks, time to first token {ttft}, usage in stream: {usage is not None}"
 
+    question = [{"role": "user", "content": "How many r's are in the word 'strawberry'?"}]
+
+    @check("reasoning on (OpenRouter `reasoning`)")
+    def _():
+        r = create(messages=question, **{param: 1500}, extra_body={"reasoning": {"enabled": True}})
+        m = r.choices[0].message
+        details = getattr(m, "reasoning_details", None)
+        state["turn"] = assistant_turn(m)
+        return "ok", (f"answer={(m.content or '').strip()[:40]!r}, reasoning tokens={reasoning_tokens(r.usage)}, "
+                      f"reasoning text={'yes' if getattr(m, 'reasoning', None) else 'no'}, "
+                      f"reasoning_details={'yes' if details else 'no'}")
+
+    @check("reasoning off")
+    def _():
+        r = create(messages=question, **{param: 60}, extra_body={"reasoning": {"enabled": False}})
+        thinking = reasoning_tokens(r.usage)
+        return ("ok" if not thinking else "unsupported"), (
+            f"reasoning tokens={thinking}, answer={(r.choices[0].message.content or '').strip()[:40]!r}"
+            + (" (this model always reasons: give it a large max_tokens)" if thinking else ""))
+
+    @check("reasoning_details passed back")
+    def _():
+        if not state.get("turn"):
+            return "skipped", "no assistant turn from the reasoning probe"
+        r = create(messages=question + [state["turn"], {"role": "user", "content": "Are you sure? Think carefully."}],
+                   **{param: 1500}, extra_body={"reasoning": {"enabled": True}})
+        return "ok", f"follow-up accepted: {(r.choices[0].message.content or '').strip()[:60]!r}"
+
     @check("embeddings")
     def _():
         if not embed_model:
@@ -175,6 +210,18 @@ def run_checks(client: OpenAI, model: str, embed_model) -> list:
             return "error", "accepted an unknown model name"
         except openai.APIStatusError as e:
             return "ok", f"HTTP {e.status_code} {type(e).__name__} (Day 1 6.2 expects 404 NotFoundError)"
+
+    @check("OpenRouter key limits")
+    def _():
+        if not is_openrouter(str(client.base_url)):
+            return "skipped", "not OpenRouter"
+        resp = httpx.get(str(client.base_url).rstrip("/") + "/key", timeout=20,
+                         headers={"Authorization": f"Bearer {client.api_key}"})
+        resp.raise_for_status()
+        d = resp.json().get("data", {})
+        state["free_tier"] = d.get("is_free_tier")
+        return "ok", (f"free tier={d.get('is_free_tier')}, credit limit={d.get('limit')}, "
+                      f"used={d.get('usage')}, label={d.get('label')!r}")
 
     @check("list models")
     def _():
@@ -198,6 +245,16 @@ def recommendations(results: list) -> list:
         recs.append("Forced tool calls unsupported: Day 3 agent needs tool calling; check another model.")
     if by["embeddings"].status not in ("ok",):
         recs.append("Embeddings unavailable: Day 2 needs EMBED_MODEL or the local sentence-transformers fallback.")
+    if "(on by default!)" in by["chat"].detail:
+        recs.append("The model reasons by default and spends max_tokens on it: use LLMConfig(reasoning={'enabled': "
+                    "False}) (or effort 'low'), and give raw calls a larger max_tokens.")
+    if by.get("reasoning off") and by["reasoning off"].status == "unsupported":
+        recs.append("Reasoning cannot be switched off for this model: Day 1 cells with max_tokens below ~200 may "
+                    "return empty answers. Prefer a model where reasoning is optional for class.")
+    key = by.get("OpenRouter key limits")
+    if key and "free tier=True" in key.detail:
+        recs.append("Free-tier key: :free models allow 50 requests/day without credits (1000/day with $10+). "
+                    "The Day 1 code-along alone makes ~55 calls: participants need credits or a paid model.")
     return recs
 
 
@@ -210,7 +267,7 @@ def main() -> int:
         print("missing:", ", ".join(missing))
         return 1
     base_url, model, embed = os.environ["LLM_BASE_URL"], os.environ["LLM_MODEL"], os.environ.get("EMBED_MODEL")
-    client = OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=base_url, max_retries=0, timeout=60)
+    client = make_client(os.environ["LLM_API_KEY"], base_url, timeout=60)
     results = run_checks(client, model, embed)
     recs = recommendations(results)
     if args.json:

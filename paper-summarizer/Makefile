@@ -1,8 +1,6 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 RUN := $(COMPOSE) run --rm
-# Reference notebooks live one level up in the course repo; mounted read-only for `make notebooks`.
-REFERENCE_DIR ?= $(abspath ../reference)
 
 .DEFAULT_GOAL := help
 .PHONY: help env build up down test lint mock gateway notebooks exec-notebooks check-gateway lock logs clean
@@ -35,12 +33,8 @@ mock: env  ## Start only mock-llm on http://localhost:8100
 gateway: env  ## Start the LiteLLM gateway (rehearsal profile) on http://localhost:4000
 	$(COMPOSE) --profile gateway up -d --wait gateway
 
-notebooks: env  ## Regenerate notebooks (Day 1: byte-for-byte copies of the reference notebooks)
-	@if [ -d "$(REFERENCE_DIR)" ]; then \
-	  $(RUN) --no-deps -v "$(REFERENCE_DIR)":/reference:ro tests python tools/build_notebooks.py --reference /reference; \
-	else \
-	  $(RUN) --no-deps tests python tools/build_notebooks.py; \
-	fi
+notebooks: env  ## Regenerate the Day 2+ notebooks from templates (Day 1 is edited by hand, never touched)
+	$(RUN) --no-deps tests python tools/build_notebooks.py
 
 exec-notebooks: env  ## Execute every notebook against mock-llm; fail on any unexpected error
 	$(RUN) tests python tools/exec_notebooks.py
@@ -50,7 +44,7 @@ check-gateway: env  ## Probe the endpoint in .env (LLM_BASE_URL) for supported f
 
 lock:  ## Re-resolve requirements.lock / requirements-dev.lock (needs network)
 	docker run --rm -v "$(CURDIR)":/w -w /w ghcr.io/astral-sh/uv:python3.11-trixie-slim sh -c '\
-	  uv pip compile pyproject.toml --python-version 3.11 --universal -q -o requirements.lock && \
+	  uv pip compile pyproject.toml --extra mock --python-version 3.11 --universal -q -o requirements.lock && \
 	  uv pip compile pyproject.toml --extra dev -c requirements.lock --python-version 3.11 --universal -q -o requirements-dev.lock'
 
 logs:  ## Follow service logs

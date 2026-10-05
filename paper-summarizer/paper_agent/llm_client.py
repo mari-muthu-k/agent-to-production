@@ -81,6 +81,7 @@ class LLMConfig:
     breaker_threshold: int = 5            # consecutive failures before the circuit opens
     breaker_reset_s: float = 30.0         # how long the circuit stays open
     max_tokens_param: str = "max_tokens"  # some models want "max_completion_tokens"
+    reasoning: Optional[dict] = None      # OpenRouter, e.g. {"enabled": False} or {"effort": "low"}; None = default
 
 
 @dataclass
@@ -94,6 +95,7 @@ class CallRecord:
     latency_ms: int
     cost_usd: float
     finish_reason: Optional[str]
+    reasoning_tokens: int = 0   # "thinking" tokens: billed as output, and they count toward max_tokens
 
 
 CALL_LOG: list = []   # every call lands here; Day 4 ships it to real tracing
@@ -156,7 +158,13 @@ class LLMClient:
         self.breaker = CircuitBreaker(config.breaker_threshold, config.breaker_reset_s)
         self._slots = threading.BoundedSemaphore(config.max_concurrency)
         self._lock = threading.Lock()
+        self._turns = threading.local()   # each thread's last assistant turn, for repairs and follow-ups
         self.spent_usd = 0.0
+
+    @property
+    def last_message(self) -> Optional[dict]:
+        """The last assistant turn (with OpenRouter's reasoning_details) to send back in a follow-up."""
+        return getattr(self._turns, "message", None)
 
     # -- helpers ------------------------------------------------------------
     def _backoff_delay(self, attempt: int) -> float:
@@ -217,6 +225,8 @@ class LLMClient:
         params = {"messages": messages, self.config.max_tokens_param: max_tokens, **kwargs}
         if temperature is not None:   # some reasoning models reject temperature
             params["temperature"] = temperature
+        if self.config.reasoning is not None:   # OpenRouter's reasoning switch travels in the request body
+            params["extra_body"] = {**params.get("extra_body", {}), "reasoning": self.config.reasoning}
 
         start = time.perf_counter()
         model_used, status = self.config.model, "ok"
@@ -237,16 +247,26 @@ class LLMClient:
         choice, usage = resp.choices[0], resp.usage
         in_tok = getattr(usage, "prompt_tokens", 0) or 0
         out_tok = getattr(usage, "completion_tokens", 0) or 0
+        reasoning_tok = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
         truncated = choice.finish_reason == "length"
         self._record(request_id=request_id, model=model_used,
                      status="truncated" if truncated else status, attempts=attempts,
                      input_tokens=in_tok, output_tokens=out_tok,
                      latency_ms=int((time.perf_counter() - start) * 1000),
-                     cost_usd=round(self._cost(in_tok, out_tok), 6), finish_reason=choice.finish_reason)
+                     cost_usd=round(self._cost(in_tok, out_tok), 6), finish_reason=choice.finish_reason,
+                     reasoning_tokens=reasoning_tok)
+
+        # Keep the assistant turn for follow-ups. OpenRouter: pass reasoning_details back unmodified.
+        turn = {"role": "assistant", "content": choice.message.content}
+        if getattr(choice.message, "reasoning_details", None):
+            turn["reasoning_details"] = choice.message.reasoning_details
+        self._turns.message = turn
+        hint = ("; the model's reasoning used the whole budget: raise max_tokens or set reasoning={'enabled': False}"
+                if reasoning_tok and not choice.message.content else "")
 
         # Never hand half an answer to the rest of the system.
         if truncated:
-            raise TruncatedOutputError(f"[{request_id}] output cut off at max_tokens={max_tokens}")
+            raise TruncatedOutputError(f"[{request_id}] output cut off at max_tokens={max_tokens}{hint}")
         return choice.message.content
 
     def chat_structured(self, messages: list, schema: Type[T], max_tokens: int = 500, **kwargs) -> T:
@@ -257,7 +277,7 @@ class LLMClient:
         except ValidationError as first_error:
             logger.warning(f"validation failed ({first_error.error_count()} errors); repairing once")
             repair = messages + [
-                {"role": "assistant", "content": text},
+                self.last_message or {"role": "assistant", "content": text},
                 {"role": "user", "content": "Your previous reply failed validation:\n"
                                             f"{first_error}\nReply with ONLY the corrected JSON object."},
             ]
