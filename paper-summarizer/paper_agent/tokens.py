@@ -37,8 +37,9 @@ def estimate_tokens_from_words(words: int) -> int:
 
 
 def cost_usd(usage, price_in_per_1m: float, price_out_per_1m: float) -> float:
-    """Cost of one call from its `usage` object (same formula as the Day 1 notebook)."""
-    return (usage.prompt_tokens * price_in_per_1m + usage.completion_tokens * price_out_per_1m) / 1_000_000
+    """Cost of one call from its `usage` (the dict in an OpenRouter reply; same formula as Day 1)."""
+    get = usage.get if isinstance(usage, dict) else (lambda k: getattr(usage, k))
+    return (get("prompt_tokens") * price_in_per_1m + get("completion_tokens") * price_out_per_1m) / 1_000_000
 
 
 def fit_sections(paper: dict, budget_tokens: int, section_ids: Optional[list] = None,

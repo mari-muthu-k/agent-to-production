@@ -2,17 +2,25 @@
 import threading
 import time
 
-import httpx2
-import openai
 import pytest
+import requests
+from requests.structures import CaseInsensitiveDict
 
 from paper_agent.llm_client import (
     CALL_LOG,
     RETRYABLE_ERRORS,
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
     BudgetExceededError,
     CircuitOpenError,
     LLMClient,
     LLMConfig,
+    NotFoundError,
+    PaymentRequiredError,
+    RateLimitError,
+    ServerError,
     StructuredOutputError,
     TransientError,
     TruncatedOutputError,
@@ -26,9 +34,9 @@ FAST = dict(model="fake", base_delay_s=0.01, max_delay_s=0.1)
 
 
 def status_error(cls, status: int, headers=None):
-    request = httpx2.Request("POST", "http://test/v1/chat/completions")
-    response = httpx2.Response(status, headers=headers or {}, request=request)
-    return cls(f"HTTP {status}", response=response, body=None)
+    response = requests.Response()
+    response.status_code, response.headers = status, CaseInsensitiveDict(headers or {})
+    return cls(f"HTTP {status}", status_code=status, response=response)
 
 
 # --- backoff -----------------------------------------------------------------
@@ -69,7 +77,7 @@ def test_retry_after_from_exception_attribute(no_sleep):
 
 
 def test_retry_after_from_http_header(no_sleep):
-    err = status_error(openai.RateLimitError, 429, {"retry-after": "4"})
+    err = status_error(RateLimitError, 429, {"retry-after": "4"})
     fake = FakeLLM([err, fake_response("ok")])
     LLMClient(LLMConfig(model="fake", base_delay_s=0.01, max_delay_s=20), client=fake).chat(MSG)
     assert no_sleep == [4.0]
@@ -82,7 +90,7 @@ def test_retry_after_is_capped_by_max_delay(no_sleep):
 
 
 def test_retry_after_header_from_mock_llm(mock, no_sleep):
-    """A real 429 with a Retry-After header, end to end through the OpenAI SDK."""
+    """A real 429 with a Retry-After header, end to end over HTTP."""
     mock.fault(status=429, retry_after=2, count=1)
     llm = LLMClient(LLMConfig(model="mock-llm", base_delay_s=0.01, max_delay_s=20), client=mock.client())
     assert llm.chat(MSG, max_tokens=60)
@@ -90,8 +98,8 @@ def test_retry_after_header_from_mock_llm(mock, no_sleep):
     assert mock.stats()["status_429"] == 1
 
 
-@pytest.mark.parametrize("cls,status", [(openai.BadRequestError, 400), (openai.AuthenticationError, 401),
-                                        (openai.NotFoundError, 404)])
+@pytest.mark.parametrize("cls,status", [(BadRequestError, 400), (AuthenticationError, 401),
+                                        (PaymentRequiredError, 402), (NotFoundError, 404)])
 def test_client_errors_are_not_retried(cls, status, no_sleep):
     fake = FakeLLM([status_error(cls, status), fake_response("never reached")])
     with pytest.raises(cls):
@@ -102,14 +110,14 @@ def test_client_errors_are_not_retried(cls, status, no_sleep):
 def test_400_from_mock_llm_is_not_retried(mock, no_sleep):
     llm = LLMClient(LLMConfig(model="mock-llm", **{k: v for k, v in FAST.items() if k != "model"}),
                     client=mock.client())
-    with pytest.raises(openai.BadRequestError):
+    with pytest.raises(BadRequestError):
         llm.chat(MSG, temperature=5.0)
     assert mock.stats()["chat_requests"] == 1 and no_sleep == []
 
 
 def test_retryable_errors_are_exactly_timeouts_connection_429_5xx():
-    assert set(RETRYABLE_ERRORS) == {openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError,
-                                     openai.InternalServerError, TransientError}
+    assert set(RETRYABLE_ERRORS) == {APITimeoutError, APIConnectionError, RateLimitError, ServerError,
+                                     TransientError}
 
 
 # --- circuit breaker ---------------------------------------------------------
@@ -151,10 +159,10 @@ def test_fallback_model_is_used(no_sleep):
 
 
 def test_fallback_not_used_for_client_errors():
-    primary = FakeLLM([status_error(openai.BadRequestError, 400)])
+    primary = FakeLLM([status_error(BadRequestError, 400)])
     backup = FakeLLM([fake_response("should not be called")])
     llm = LLMClient(LLMConfig(**{**FAST, "fallback_model": "backup"}), client=primary, fallback_client=backup)
-    with pytest.raises(openai.BadRequestError):
+    with pytest.raises(BadRequestError):
         llm.chat(MSG)
     assert backup.calls == 0
 
@@ -186,11 +194,7 @@ def test_concurrency_cap_holds():
     lock, state = threading.Lock(), {"now": 0, "max": 0}
 
     class SlowProvider:
-        def __init__(self):
-            from types import SimpleNamespace as NS
-            self.chat = NS(completions=NS(create=self._create))
-
-        def _create(self, **kwargs):
+        def chat(self, **kwargs):
             with lock:
                 state["now"] += 1
                 state["max"] = max(state["max"], state["now"])
@@ -227,9 +231,9 @@ def test_max_tokens_param_is_configurable():
     seen = {}
 
     class Spy(FakeLLM):
-        def _create(self, **kwargs):
+        def chat(self, **kwargs):
             seen.update(kwargs)
-            return super()._create(**kwargs)
+            return super().chat(**kwargs)
 
     LLMClient(LLMConfig(model="fake", max_tokens_param="max_completion_tokens"),
               client=Spy([fake_response("ok")])).chat(MSG, max_tokens=42, temperature=None)
@@ -255,7 +259,7 @@ def test_validation_fails_loudly_after_one_repair():
 
 
 def test_validation_repair_against_mock_llm(mock):
-    client = mock.client(default_headers={"X-Mock-Bad-Json": "1"})
+    client = mock.client(headers={"X-Mock-Bad-Json": "1"})
     llm = LLMClient(LLMConfig(model="mock-llm"), client=client)
     from paper_agent.explain import paper_messages
     from paper_agent.schemas import PaperExplainer
@@ -270,3 +274,75 @@ def test_one_record_per_call_and_summary(no_sleep):
     llm.chat(MSG)
     s = summarize_calls()
     assert s["calls"] == 2 and s["retries"] == 1 and s["input_tokens"] == 200
+
+
+# --- switching models (free tiers have caps) -------------------------------------
+def test_models_from_env_are_read_at_every_call(monkeypatch):
+    seen = []
+
+    class Spy(FakeLLM):
+        def chat(self, **kwargs):
+            seen.append(kwargs["model"])
+            return super().chat(**kwargs)
+
+    llm = LLMClient(LLMConfig(), client=Spy([fake_response("a"), fake_response("b")]))
+    monkeypatch.setenv("LLM_MODEL", "first-model:free")
+    llm.chat(MSG)
+    monkeypatch.setenv("LLM_MODEL", "second-model:free")          # switched mid-session, no restart
+    llm.chat(MSG)
+    assert seen == ["first-model:free", "second-model:free"]
+
+
+def test_comma_list_falls_through_on_retryable_errors(monkeypatch, no_sleep):
+    monkeypatch.setenv("LLM_MODEL", "busy:free,spare:free")
+    monkeypatch.delenv("LLM_FALLBACK_MODEL", raising=False)
+    fake = FakeLLM([status_error(ServerError, 503)] * 2 + [fake_response("from spare")])
+    llm = LLMClient(LLMConfig(max_retries=1, base_delay_s=0.01), client=fake)
+    assert llm.chat(MSG) == "from spare"
+    assert CALL_LOG[-1].model == "spare:free" and CALL_LOG[-1].status == "fallback_ok"
+    assert llm.exhausted == set()                     # a busy model is not "exhausted": tried again next time
+
+
+def test_daily_cap_switches_immediately_and_is_remembered(monkeypatch, no_sleep):
+    monkeypatch.setenv("LLM_MODEL", "capped:free,spare:free")
+    reset_in_hours = str(int((time.time() + 6 * 3600) * 1000))
+    capped = status_error(RateLimitError, 429, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset_in_hours})
+    seen = []
+
+    class Spy(FakeLLM):
+        def chat(self, **kwargs):
+            seen.append(kwargs["model"])
+            return super().chat(**kwargs)
+
+    llm = LLMClient(LLMConfig(max_retries=3), client=Spy([capped, fake_response("a"), fake_response("b")]))
+    assert llm.chat(MSG) == "a" and no_sleep == []           # no pointless waiting on a daily cap
+    assert llm.exhausted == {"capped:free"}
+    llm.chat(MSG)
+    assert seen == ["capped:free", "spare:free", "spare:free"]
+
+
+def test_out_of_credits_402_switches_model(monkeypatch, no_sleep):
+    monkeypatch.setenv("LLM_MODEL", "paid-model,free-model:free")
+    fake = FakeLLM([status_error(PaymentRequiredError, 402), fake_response("free answer")])
+    llm = LLMClient(LLMConfig(), client=fake)
+    assert llm.chat(MSG) == "free answer" and llm.exhausted == {"paid-model"}
+
+
+def test_no_model_configured_is_a_clear_error(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_FALLBACK_MODEL", raising=False)
+    with pytest.raises(ValueError, match="set LLM_MODEL"):
+        LLMClient(LLMConfig(), client=FakeLLM([])).chat(MSG)
+
+
+def test_http_errors_map_to_classes(mock):
+    client = mock.client()
+    for status, cls in [(400, BadRequestError), (401, AuthenticationError), (404, NotFoundError),
+                        (429, RateLimitError), (503, ServerError)]:
+        with pytest.raises(cls) as e:
+            client.chat(model="m", max_tokens=5, messages=MSG, headers={"X-Mock-Status": str(status)})
+        assert e.value.status_code == status
+    with pytest.raises(APITimeoutError):
+        mock.client(timeout=0.2).chat(model="m", max_tokens=5, messages=MSG, headers={"X-Mock-Delay-Ms": "2000"})
+    with pytest.raises(APIConnectionError):
+        type(client)(api_key="k", base_url="http://127.0.0.1:9/v1").chat(model="m", messages=MSG)

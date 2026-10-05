@@ -10,9 +10,8 @@ requires-python = ">=3.11"   # Docker uses 3.11; Colab runs a newer Python
 # Direct dependencies only, with ranges wide enough for Colab's preinstalled packages.
 # Exact pins for Docker live in requirements.lock / requirements-dev.lock (`make lock`).
 dependencies = [
-    "openai>=1.40",
+    "requests>=2.31",    # all model calls: OpenRouter's HTTP API, no SDK
     "pydantic>=2.7",
-    "httpx",
     "tiktoken",
     "numpy",
 ]
@@ -31,6 +30,7 @@ dev = [
     "paper-agent[rag,mock]",
     "pytest",
     "ruff",
+    "openai",       # tests only: proves mock-llm stays OpenAI-compatible (the LiteLLM gateway relies on it)
     "ipykernel",    # a kernel for tools/exec_notebooks.py (no Jupyter server: notebooks run in Colab)
     "nbclient",     # tools/exec_notebooks.py
     "nbformat",

@@ -1,6 +1,6 @@
 """Embedders (Day 2, section 5.3): text -> L2-normalised float32 vectors.
 
-OpenAIEmbedder   EMBED_MODEL through the same OpenAI-compatible endpoint as chat (LLM_BASE_URL).
+OpenRouterEmbedder  EMBED_MODEL through OpenRouter's /embeddings (same LLM_BASE_URL and key as chat).
                  Same reliability as Day 1: retries only on timeouts/429/5xx with backoff + Retry-After,
                  circuit breaker, and one log record per call in llm_client.CALL_LOG.
 HashingEmbedder  local, free, offline, no model: hashed bag-of-words (see hashing.py). Useful to
@@ -41,10 +41,13 @@ class HashingEmbedder:
     __call__ = embed
 
 
-class OpenAIEmbedder:
+class OpenRouterEmbedder:
+    """Keep ONE embedding model per index: unlike chat models, you cannot switch it mid-session
+    without re-embedding everything (stores refuse vectors from another model)."""
+
     def __init__(self, model: Optional[str] = None, client=None, batch_size: int = 64,
                  dimensions: Optional[int] = None, price_per_1m: float = 0.0, config: Optional[LLMConfig] = None):
-        self.model = model or os.environ.get("EMBED_MODEL") or "text-embedding-3-small"
+        self.model = model or os.environ.get("EMBED_MODEL") or "nvidia/nemotron-3-embed-1b:free"
         self.batch_size, self.dimensions = batch_size, dimensions
         # Reuse Day 1's LLMClient for its retry policy, breaker, call log and spend tracking.
         cfg = config or LLMConfig(model=self.model, price_in_per_1m=price_per_1m)
@@ -63,7 +66,7 @@ class OpenAIEmbedder:
                 raise CircuitOpenError("embedding provider is failing; circuit open, failing fast")
             attempts += 1
             try:
-                resp = self.client.embeddings.create(**params)
+                resp = self.client.embeddings(**params)
                 self.policy.breaker.record_success()
                 break
             except RETRYABLE_ERRORS as exc:
@@ -71,13 +74,13 @@ class OpenAIEmbedder:
                 if attempts > self.policy.config.max_retries:
                     raise
                 time.sleep(max(self.policy._backoff_delay(attempts - 1), self.policy._retry_after(exc)))
-        n = getattr(resp.usage, "prompt_tokens", 0) or 0
+        n = (resp.get("usage") or {}).get("prompt_tokens") or 0
         self.tokens_used += n
         self.policy._record(request_id=request_id, model=self.model, status="ok", attempts=attempts,
                             input_tokens=n, output_tokens=0, finish_reason=None,
                             latency_ms=int((time.perf_counter() - start) * 1000),
                             cost_usd=round(self.policy._cost(n, 0), 6))
-        return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+        return [d["embedding"] for d in sorted(resp["data"], key=lambda d: d.get("index", 0))]
 
     def embed(self, texts: list) -> np.ndarray:
         """Embed many texts in batches. Identical texts are embedded once per embedder (cache)."""

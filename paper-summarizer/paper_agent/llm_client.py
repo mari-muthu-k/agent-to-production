@@ -4,6 +4,12 @@ llm_client.py - the reliable LLM client you build on Day 1.
 Every model call on Days 2, 3 and 4 goes through this module, so each
 protection here (timeouts, retries, circuit breaker, fallback, budget,
 validation, logging) protects the whole Paper Summarizer agent.
+
+It talks to OpenRouter's HTTP API directly with `requests` (no SDK).
+Settings are read from the environment on EVERY call, so you can switch
+models mid-session: LLM_MODEL may be one model or a comma-separated list
+("model-a:free,model-b:free"); the next one is used when one is rate-limited,
+out of credits or unavailable.
 """
 import json
 import logging
@@ -16,12 +22,12 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Optional, Type, TypeVar
 
-import openai
-from openai import OpenAI
+import requests
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger("llm_client")
 T = TypeVar("T", bound=BaseModel)
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -50,17 +56,108 @@ class BudgetExceededError(Exception):
     """This client has spent its cost budget."""
 
 
+class APIError(Exception):
+    """An HTTP error from the API. `status_code`, the error `body` and the `response` are attached."""
+    def __init__(self, message, status_code=None, response=None, body=None):
+        super().__init__(message)
+        self.message, self.status_code, self.response, self.body = message, status_code, response, body
+
+
+class BadRequestError(APIError): pass          # 400: invalid request (bad parameter, context too long)
+class AuthenticationError(APIError): pass      # 401: wrong or missing key
+class PaymentRequiredError(APIError): pass     # 402: out of credits (OpenRouter)
+class PermissionDeniedError(APIError): pass    # 403: e.g. input flagged by moderation
+class NotFoundError(APIError): pass            # 404: unknown model or URL
+class RateLimitError(APIError): pass           # 429: too many requests
+class ServerError(APIError): pass              # 408, 5xx: timeout upstream, provider down, no provider
+class APITimeoutError(APIError): pass          # we gave up waiting
+class APIConnectionError(APIError): pass       # network failure
+
+
+STATUS_ERRORS = {400: BadRequestError, 401: AuthenticationError, 402: PaymentRequiredError,
+                 403: PermissionDeniedError, 404: NotFoundError, 408: ServerError, 429: RateLimitError}
+
 # Worth retrying: the same request may succeed a moment later.
 RETRYABLE_ERRORS = (
-    openai.APITimeoutError,       # took too long
-    openai.APIConnectionError,    # network blip
-    openai.RateLimitError,        # HTTP 429
-    openai.InternalServerError,   # HTTP 5xx
+    APITimeoutError,       # took too long
+    APIConnectionError,    # network blip
+    RateLimitError,        # HTTP 429
+    ServerError,           # HTTP 408, 5xx
     TransientError,
 )
 # NOT retryable: they fail identically every time, and you pay for each try.
-#   openai.BadRequestError (400), AuthenticationError (401),
+#   BadRequestError (400), AuthenticationError (401), PaymentRequiredError (402),
 #   PermissionDeniedError (403), NotFoundError (404)
+
+
+def api_error(response, body) -> APIError:
+    """Turn an error response into the matching exception class."""
+    err = body.get("error", {}) if isinstance(body, dict) else {}
+    status = response.status_code if response.status_code >= 400 else (err.get("code") or 500)
+    message = err.get("message") or (response.text or "")[:300] or f"HTTP {status}"
+    raw = (err.get("metadata") or {}).get("raw")
+    if raw:
+        message += f" (provider said: {str(raw)[:200]})"
+    cls = STATUS_ERRORS.get(status, ServerError if status >= 500 else APIError)
+    return cls(f"HTTP {status}: {message}", status_code=status, response=response, body=body)
+
+
+# ---------------------------------------------------------------------------
+# The HTTP client: OpenRouter's REST API with requests
+# ---------------------------------------------------------------------------
+class OpenRouterClient:
+    """POSTs JSON to OpenRouter (or any OpenAI-compatible URL) and returns the JSON reply as a dict.
+
+    The key and URL come from LLM_API_KEY / LLM_BASE_URL at call time unless given here.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None,
+                 timeout: float = 60.0, headers: Optional[dict] = None):
+        self._api_key, self._base_url, self.timeout = api_key, base_url, timeout
+        self.extra_headers = headers or {}
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key or os.environ.get("LLM_API_KEY", "")
+
+    @property
+    def base_url(self) -> str:
+        return (self._base_url or os.environ.get("LLM_BASE_URL") or OPENROUTER_URL).rstrip("/")
+
+    def headers(self, extra: Optional[dict] = None) -> dict:
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+                "HTTP-Referer": "https://mari-muthu-k.github.io/agent-to-production/",   # optional app attribution
+                "X-Title": "Paper Summarizer Workshop", **self.extra_headers, **(extra or {})}
+
+    def post(self, path: str, body: dict, headers: Optional[dict] = None, timeout: Optional[float] = None) -> dict:
+        try:
+            r = requests.post(f"{self.base_url}/{path}", json=body, headers=self.headers(headers),
+                              timeout=timeout or self.timeout)
+        except requests.Timeout as e:
+            raise APITimeoutError(f"no answer within {timeout or self.timeout}s") from e
+        except requests.ConnectionError as e:
+            raise APIConnectionError(f"could not reach {self.base_url}: {e}") from e
+        try:
+            data = r.json()
+        except ValueError:
+            data = None
+        # OpenRouter can also answer 200 with an error body (e.g. the provider failed mid-request).
+        if r.status_code >= 400 or not isinstance(data, dict) or ("error" in data and "choices" not in data):
+            raise api_error(r, data)
+        return data
+
+    def chat(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
+        """POST /chat/completions. `body` is the JSON request: model, messages, max_tokens, ..."""
+        return self.post("chat/completions", body, headers, timeout)
+
+    def embeddings(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
+        """POST /embeddings with {"model": ..., "input": [...]}."""
+        return self.post("embeddings", body, headers, timeout)
+
+
+def env_models(name: str = "LLM_MODEL") -> list:
+    """Models listed in an environment variable: "a" or "a,b,c" (read now, so switching takes effect)."""
+    return [m.strip() for m in os.environ.get(name, "").split(",") if m.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +165,14 @@ RETRYABLE_ERRORS = (
 # ---------------------------------------------------------------------------
 @dataclass
 class LLMConfig:
-    model: str
-    price_in_per_1m: float = 0.0          # USD per 1M input tokens
+    model: str = ""                       # "" = LLM_MODEL, read at every call; may be "a,b,c"
+    price_in_per_1m: float = 0.0          # USD per 1M input tokens (0 for :free models)
     price_out_per_1m: float = 0.0         # USD per 1M output tokens
     timeout_s: float = 30.0
     max_retries: int = 3
     base_delay_s: float = 1.0
     max_delay_s: float = 20.0
-    fallback_model: Optional[str] = None  # tried once if the primary fails
+    fallback_model: Optional[str] = None  # tried once each if the primary fails ("" = LLM_FALLBACK_MODEL)
     budget_usd: Optional[float] = None    # refuse new calls once this much is spent
     max_concurrency: int = 4              # client-side limit on parallel calls
     breaker_threshold: int = 5            # consecutive failures before the circuit opens
@@ -144,27 +241,36 @@ class CircuitBreaker:
 # The client
 # ---------------------------------------------------------------------------
 class LLMClient:
-    def __init__(self, config: LLMConfig, client=None, fallback_client=None):
-        self.config = config
-        # max_retries=0: we do our own retries so we can see, control and log them.
-        # Never stack SDK retries with your own: 3 x 3 = 9 attempts.
-        self.client = client or OpenAI(
-            api_key=os.environ.get("LLM_API_KEY"),
-            base_url=os.environ.get("LLM_BASE_URL") or None,
-            timeout=config.timeout_s,
-            max_retries=0,
-        )
+    def __init__(self, config: Optional[LLMConfig] = None, client=None, fallback_client=None):
+        self.config = config or LLMConfig()
+        # One retry layer only: ours, so we can see, control and log every attempt.
+        self.client = client or OpenRouterClient(timeout=self.config.timeout_s)
         self.fallback_client = fallback_client or self.client
-        self.breaker = CircuitBreaker(config.breaker_threshold, config.breaker_reset_s)
-        self._slots = threading.BoundedSemaphore(config.max_concurrency)
+        self.breaker = CircuitBreaker(self.config.breaker_threshold, self.config.breaker_reset_s)
+        self._slots = threading.BoundedSemaphore(self.config.max_concurrency)
         self._lock = threading.Lock()
         self._turns = threading.local()   # each thread's last assistant turn, for repairs and follow-ups
+        self.exhausted: set = set()       # models out of daily quota or credits: skipped from now on
         self.spent_usd = 0.0
 
     @property
     def last_message(self) -> Optional[dict]:
         """The last assistant turn (with OpenRouter's reasoning_details) to send back in a follow-up."""
         return getattr(self._turns, "message", None)
+
+    def models(self) -> list:
+        """Models to try, in order: primary first, then fallbacks; exhausted ones are skipped."""
+        split = lambda value: [m.strip() for m in value.split(",") if m.strip()]   # noqa: E731
+        fallbacks = split(self.config.fallback_model or "")
+        if self.config.model:                   # models set in code: use exactly those
+            primary = split(self.config.model)
+        else:                                   # models from the environment, re-read on every call
+            primary, fallbacks = env_models("LLM_MODEL"), fallbacks or env_models("LLM_FALLBACK_MODEL")
+        ordered = list(dict.fromkeys(primary + fallbacks))
+        usable = [m for m in ordered if m not in self.exhausted]
+        if not ordered:
+            raise ValueError("no model configured: set LLM_MODEL (one model, or a comma-separated list)")
+        return usable or ordered[-1:]    # everything exhausted: still try the last one (it may have reset)
 
     # -- helpers ------------------------------------------------------------
     def _backoff_delay(self, attempt: int) -> float:
@@ -184,6 +290,21 @@ class LLMClient:
         except (TypeError, ValueError):
             return 0.0
 
+    def _quota_gone(self, exc: Exception) -> bool:
+        """Out of credits (402), or a 429 that will not clear soon (e.g. a free model's daily cap).
+        Waiting is pointless: switch to the next model instead."""
+        if isinstance(exc, PaymentRequiredError):
+            return True
+        if not isinstance(exc, RateLimitError):
+            return False
+        headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+        try:
+            reset_s = float(headers.get("x-ratelimit-reset", 0)) / 1000 - time.time()   # epoch milliseconds
+            wait = float(headers.get("retry-after") or 0)
+        except (TypeError, ValueError):
+            return False
+        return max(reset_s, wait) > 120
+
     def _cost(self, in_tok: int, out_tok: int) -> float:
         return (in_tok * self.config.price_in_per_1m + out_tok * self.config.price_out_per_1m) / 1_000_000
 
@@ -195,20 +316,20 @@ class LLMClient:
         logger.info(json.dumps(asdict(rec)))   # one JSON line per call: easy to ship to Datadog/ELK
         return rec
 
-    def _create_with_retries(self, params: dict, request_id: str):
-        """Call the primary model with retries. Returns (response, attempts)."""
+    def _create_with_retries(self, model: str, params: dict, request_id: str):
+        """Call one model with retries. Returns (response, attempts)."""
         attempts = 0
         while True:
             if not self.breaker.allow():
                 raise CircuitOpenError("provider is failing; circuit open, failing fast")
             attempts += 1
             try:
-                resp = self.client.chat.completions.create(model=self.config.model, **params)
+                resp = self.client.chat(model=model, **params)
                 self.breaker.record_success()
                 return resp, attempts
             except RETRYABLE_ERRORS as exc:
                 self.breaker.record_failure()
-                if attempts > self.config.max_retries:
+                if attempts > self.config.max_retries or self._quota_gone(exc):
                     raise
                 delay = max(self._backoff_delay(attempts - 1), self._retry_after(exc))
                 logger.warning(f"[{request_id}] attempt {attempts} failed ({type(exc).__name__}); "
@@ -225,49 +346,63 @@ class LLMClient:
         params = {"messages": messages, self.config.max_tokens_param: max_tokens, **kwargs}
         if temperature is not None:   # some reasoning models reject temperature
             params["temperature"] = temperature
-        if self.config.reasoning is not None:   # OpenRouter's reasoning switch travels in the request body
-            params["extra_body"] = {**params.get("extra_body", {}), "reasoning": self.config.reasoning}
+        if self.config.reasoning is not None:   # OpenRouter's reasoning switch, part of the JSON body
+            params["reasoning"] = self.config.reasoning
 
         start = time.perf_counter()
-        model_used, status = self.config.model, "ok"
+        primary, *others = self.models()
+        model_used, status = primary, "ok"
         with self._slots:             # client-side concurrency limit
             try:
-                resp, attempts = self._create_with_retries(params, request_id)
-            except RETRYABLE_ERRORS + (CircuitOpenError,) as exc:
-                if not self.config.fallback_model:
+                resp, attempts = self._create_with_retries(primary, params, request_id)
+            except RETRYABLE_ERRORS + (CircuitOpenError, PaymentRequiredError) as exc:
+                if self._quota_gone(exc):
+                    self.exhausted.add(primary)
+                    logger.warning(f"[{request_id}] {primary} is out of quota; skipping it from now on")
+                if not others:
                     self._record(request_id=request_id, model=model_used, status="failed", attempts=0,
                                  input_tokens=0, output_tokens=0, finish_reason=None, cost_usd=0.0,
                                  latency_ms=int((time.perf_counter() - start) * 1000))
                     raise
-                logger.warning(f"[{request_id}] primary failed ({type(exc).__name__}); "
-                               f"trying fallback model {self.config.fallback_model}")
-                model_used, status, attempts = self.config.fallback_model, "fallback_ok", 1
-                resp = self.fallback_client.chat.completions.create(model=model_used, **params)
+                resp = None
+                for model_used in others:          # each fallback model gets one attempt
+                    logger.warning(f"[{request_id}] {type(exc).__name__} on {primary}; trying {model_used}")
+                    try:
+                        resp = self.fallback_client.chat(model=model_used, **params)
+                        break
+                    except RETRYABLE_ERRORS + (PaymentRequiredError,) as fallback_exc:
+                        if self._quota_gone(fallback_exc):
+                            self.exhausted.add(model_used)
+                        exc = fallback_exc
+                if resp is None:
+                    raise exc
+                status, attempts = "fallback_ok", 1
 
-        choice, usage = resp.choices[0], resp.usage
-        in_tok = getattr(usage, "prompt_tokens", 0) or 0
-        out_tok = getattr(usage, "completion_tokens", 0) or 0
-        reasoning_tok = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
-        truncated = choice.finish_reason == "length"
+        choice, usage = resp["choices"][0], resp.get("usage") or {}
+        message = choice.get("message") or {}
+        in_tok = usage.get("prompt_tokens") or 0
+        out_tok = usage.get("completion_tokens") or 0
+        reasoning_tok = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+        truncated = choice.get("finish_reason") == "length"
         self._record(request_id=request_id, model=model_used,
                      status="truncated" if truncated else status, attempts=attempts,
                      input_tokens=in_tok, output_tokens=out_tok,
                      latency_ms=int((time.perf_counter() - start) * 1000),
-                     cost_usd=round(self._cost(in_tok, out_tok), 6), finish_reason=choice.finish_reason,
+                     cost_usd=round(self._cost(in_tok, out_tok), 6), finish_reason=choice.get("finish_reason"),
                      reasoning_tokens=reasoning_tok)
 
         # Keep the assistant turn for follow-ups. OpenRouter: pass reasoning_details back unmodified.
-        turn = {"role": "assistant", "content": choice.message.content}
-        if getattr(choice.message, "reasoning_details", None):
-            turn["reasoning_details"] = choice.message.reasoning_details
+        turn = {"role": "assistant", "content": message.get("content")}
+        if message.get("reasoning_details"):
+            turn["reasoning_details"] = message["reasoning_details"]
         self._turns.message = turn
         hint = ("; the model's reasoning used the whole budget: raise max_tokens or set reasoning={'enabled': False}"
-                if reasoning_tok and not choice.message.content else "")
+                if reasoning_tok and not message.get("content") else "")
 
         # Never hand half an answer to the rest of the system.
         if truncated:
             raise TruncatedOutputError(f"[{request_id}] output cut off at max_tokens={max_tokens}{hint}")
-        return choice.message.content
+        return message.get("content")
 
     def chat_structured(self, messages: list, schema: Type[T], max_tokens: int = 500, **kwargs) -> T:
         """Return a validated Pydantic object. On failure, show the model its error and retry once."""
@@ -297,6 +432,7 @@ def summarize_calls(log: Optional[list] = None) -> dict:
     return {
         "calls": len(log),
         "by_status": {s: sum(r.status == s for r in log) for s in sorted({r.status for r in log})},
+        "by_model": {m: sum(r.model == m for r in log) for m in sorted({r.model for r in log})},
         "retries": sum(max(r.attempts - 1, 0) for r in log),
         "input_tokens": sum(r.input_tokens for r in log),
         "output_tokens": sum(r.output_tokens for r in log),

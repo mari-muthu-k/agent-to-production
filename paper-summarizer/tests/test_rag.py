@@ -1,14 +1,13 @@
 """Day 2 query side: threshold, grounded answers, page-citation guard, number check, evals."""
 import json
 
-import openai
 import pytest
 
-from paper_agent.ingest.embeddings import HashingEmbedder, OpenAIEmbedder
+from paper_agent.ingest.embeddings import HashingEmbedder, OpenRouterEmbedder
 from paper_agent.ingest.pipeline import ingest_pdf
 from paper_agent.ingest.splitters import Chunk
 from paper_agent.ingest.store import Hit, NumpyStore
-from paper_agent.llm_client import LLMClient, LLMConfig
+from paper_agent.llm_client import BadRequestError, LLMClient, LLMConfig, OpenRouterClient
 from paper_agent.papers import fetch_paper, paper_ids
 from paper_agent.rag.answer import (
     PageCitationError,
@@ -123,9 +122,8 @@ def test_number_warning():
 # --- against mock-llm ----------------------------------------------------------
 @pytest.fixture(scope="module")
 def mock_index(mock_url):
-    from openai import OpenAI
-    client = OpenAI(api_key="sk-mock-local", base_url=f"{mock_url}/v1", max_retries=0)
-    emb = OpenAIEmbedder("mock-embed", client=client)
+    client = OpenRouterClient(api_key="sk-mock-local", base_url=f"{mock_url}/v1")
+    emb = OpenRouterEmbedder("mock-embed", client=client)
     store = NumpyStore(emb.model)
     for pid in paper_ids():
         ingest_pdf(fetch_paper(pid), emb, store, paper_id=pid)
@@ -170,8 +168,8 @@ def test_naive_rag_hallucinates_without_an_idk_rule(mock_index):
 def test_mock_context_window_overflow(mock_index):
     _, client = mock_index
     huge = load_text() * 8
-    with pytest.raises(openai.BadRequestError, match="maximum context length"):
-        client.chat.completions.create(model="mock-llm", max_tokens=50,
+    with pytest.raises(BadRequestError, match="maximum context length"):
+        client.chat(model="mock-llm", max_tokens=50,
                                        messages=[{"role": "user", "content": f"{huge}\n\nQuestion: why?"}])
 
 

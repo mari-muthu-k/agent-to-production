@@ -39,8 +39,7 @@ def load_env(required=REQUIRED, optional=OPTIONAL) -> dict:
 def llm_config_from_env(price_in_per_1m: float = 0.0, price_out_per_1m: float = 0.0, **overrides) -> LLMConfig:
     env = load_env()
     fields = dict(
-        model=env["LLM_MODEL"],
-        fallback_model=env.get("LLM_FALLBACK_MODEL") or None,
+        model="",                 # "" = read LLM_MODEL / LLM_FALLBACK_MODEL at every call (switchable)
         price_in_per_1m=price_in_per_1m,
         price_out_per_1m=price_out_per_1m,
         max_tokens_param=env.get("LLM_MAX_TOKENS_PARAM") or "max_tokens",
@@ -50,5 +49,5 @@ def llm_config_from_env(price_in_per_1m: float = 0.0, price_out_per_1m: float = 
 
 
 def llm_client_from_env(config: Optional[LLMConfig] = None, **overrides) -> LLMClient:
-    """An LLMClient for the configured endpoint (LLM_BASE_URL / LLM_API_KEY are read by LLMClient)."""
+    """An LLMClient for the configured endpoint; LLM_* variables are re-read on every call."""
     return LLMClient(config or llm_config_from_env(**overrides))

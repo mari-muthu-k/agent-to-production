@@ -59,7 +59,7 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 | `http://mock-llm:8000/v1` | **Offline.** The local mock answers deterministically. Free. |
 | `https://<your-gateway>/v1` | **Online.** A real OpenAI-compatible endpoint. Set `LLM_API_KEY` and `LLM_MODEL` too. |
 | `http://gateway:4000/v1` | **Online via the local LiteLLM proxy** (`make gateway`). |
-| `https://openrouter.ai/api/v1` | **OpenRouter**, the provider the course uses (see below). |
+| `https://openrouter.ai/api/v1` | **OpenRouter** over plain HTTP, the provider the course uses (see below). |
 
 The mock accepts any API key and model name, so you can leave your real `LLM_API_KEY` / `LLM_MODEL`
 in `.env` and flip only `LLM_BASE_URL`. The exceptions are deliberately bad values used in the error
@@ -70,33 +70,46 @@ Configuration names are the same everywhere: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM
 `LLM_FALLBACK_MODEL`, and `EMBED_MODEL` from Day 2. Locally they come from `.env` (gitignored); in
 Colab they come from Secrets. Keys are never written into code or images.
 
-## OpenRouter
+## OpenRouter (plain HTTP, free models)
 
-The course runs on [OpenRouter](https://openrouter.ai), which is OpenAI-compatible: the same `openai`
-SDK code works with `LLM_BASE_URL=https://openrouter.ai/api/v1`, an OpenRouter key in `LLM_API_KEY`
-and a `vendor/model` name in `LLM_MODEL` (e.g. `nvidia/nemotron-3-ultra-550b-a55b:free`). Embeddings
-work too, e.g. `EMBED_MODEL=nvidia/nemotron-3-embed-1b:free`. What the code handles for you:
+The course calls **OpenRouter's HTTP API directly with `requests`**; there is no `openai` package in the
+notebooks or in `paper_agent` (it is only a test dependency, to check the mock stays OpenAI-compatible).
+Configuration names are unchanged: `LLM_BASE_URL=https://openrouter.ai/api/v1`, `LLM_API_KEY=sk-or-...`,
+`LLM_MODEL`, optional `LLM_FALLBACK_MODEL`, and `EMBED_MODEL` (e.g. `nvidia/nemotron-3-embed-1b:free`).
 
-- **Reasoning** is an OpenRouter request option, `reasoning`, sent with the SDK's `extra_body`
-  (`{"enabled": True}`, `{"enabled": False}`, `{"effort": "low"}`). In `llm_client` it is
-  `LLMConfig(reasoning=...)`; `None` keeps the model's default. Day 2 turns it off for RAG answers.
-- **Reasoning tokens count toward `max_tokens`.** A small `max_tokens` on a reasoning model can return an
-  empty answer with `finish_reason="length"`; `llm_client` then says so in the `TruncatedOutputError`.
-- **`reasoning_details` go back unmodified** whenever an assistant turn is sent back: follow-ups,
-  validation repairs and citation repairs use `llm.last_message`, and `paper_agent.openrouter.assistant_turn()`
-  builds such a turn from any reply. Day 1 Demo D3.4b shows it with raw `requests`.
-- **Free models (`:free`)** allow **20 requests/minute** and **50 requests/day** without purchased credits
-  (1,000/day with $10+ of credits). The Day 1 code-along makes about 55 calls, so participants on a
-  free key without credits will hit the daily cap. 429s carry `X-RateLimit-*` headers; `llm_client`
-  retries them like any 429.
-- `make check-gateway` probes all of this against your key: whether the model reasons by default,
-  whether reasoning can be switched off, whether `reasoning_details` round-trip, and your key's
-  free-tier status and limits.
+**Switching models (free tiers have caps).** Everything reads the `LLM_*` variables **at call time**:
 
-Model capabilities differ: e.g. `nvidia/nemotron-3-ultra-550b-a55b:free` lists `tools`, `seed` and
-`reasoning` but not `response_format`/`structured_outputs` or `stop`, so Day 1's schema-mode (2.3b) and
-`stop` demos fall back to "not available here". Check a model's parameters at
-`https://openrouter.ai/api/v1/models`.
+- `LLM_MODEL` may be one model or a comma-separated list: `model-a:free,model-b:free`. On HTTP 429, 502
+  or 503 the next model is tried; in `llm_client`, a model whose daily quota or credits are gone (402, or a
+  429 that resets in more than 2 minutes) is skipped for the rest of the session.
+- In a notebook: `use_model("vendor/model:free")` switches immediately, no restart.
+  `free_models(("tools",))` lists free models supporting given parameters. In code:
+  `paper_agent.openrouter.use_model / current_models / free_models / list_models`.
+- `LLMConfig(model="")` (the default) follows the environment; `LLMConfig(model="x")` pins a model.
+- Keep `EMBED_MODEL` fixed: vectors from another model are not comparable, and the stores refuse them.
+- The free-tier **daily** cap (50 requests/day without credits, 1,000 with $10+) is **per account**, so
+  switching models does not reset it. Switching does help when a free model is congested or offline,
+  which happens often. The Day 1 code-along alone makes about 55 calls.
+
+**Where the HTTP code lives.**
+
+- `paper_agent/llm_client.py`: `OpenRouterClient` (`chat()`, `embeddings()`: POST JSON, return the reply
+  dict), status-code errors (`BadRequestError` 400, `AuthenticationError` 401, `PaymentRequiredError` 402,
+  `RateLimitError` 429, `ServerError` 5xx, `APITimeoutError`, `APIConnectionError`), and `LLMClient`.
+  Day 1 writes this same file from the Practice notebook.
+- `paper_agent/openrouter.py`: streaming (server-sent events), `assistant_turn()` (keeps
+  `reasoning_details`), model listing and switching, `key_info()`, rate-limit messages.
+- Day 1 notebooks use small `chat()` / `content_of()` helpers from the setup cell, and spell the first
+  call out as a raw `requests.post`.
+
+**Reasoning.** `"reasoning": {"enabled": false}` (or `{"effort": "low"}`) goes in the JSON body;
+`LLMConfig(reasoning=...)` adds it to every call. The notebooks switch it off by default, because
+reasoning tokens count toward `max_tokens`; Day 1 Demo D3.4b switches it on and sends
+`reasoning_details` back unmodified in the follow-up, as OpenRouter requires.
+
+`make check-gateway` probes the configured model (or `ARGS="--model vendor/x:free"`): parameters,
+reasoning on/off, `reasoning_details` round trip, embeddings, your key's free-tier status, and how many
+free models are available. It makes about 15 requests.
 
 ## Services
 
@@ -219,13 +232,13 @@ so a full run costs well under a cent.
 
 ```
 paper_agent/
-  llm_client.py        Day 1 reliable client (ported verbatim from the SOLUTION cell)
+  llm_client.py        Day 1 reliable client + OpenRouterClient (requests); same as the Day 1 SOLUTION cell
   schemas.py           Answer, KeyTerm, PaperExplainer
   prompts/             versioned prompt files: explainer_v1.txt
   explain.py           paper_messages, check_citations, explain_paper, show
   tokens.py            count tokens, fit sections to a budget, cost
   config.py            load settings from Colab Secrets or the environment
-  openrouter.py        OpenRouter: client with attribution headers, reasoning switch, reasoning_details turns
+  openrouter.py        OpenRouter helpers: streaming, model switching/listing, reasoning_details turns
   testing.py           FakeLLM, FlakyProvider, fake_response
   fixtures/tinycoder.py  the Day 1 paper (FICTIONAL, written for the workshop)
   fixtures/pdfs/       generated edge-case PDFs (FICTIONAL): two-column, image-only, hidden text

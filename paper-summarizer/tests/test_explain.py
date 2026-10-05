@@ -82,7 +82,7 @@ def test_explain_paper_subset_cites_only_sent_sections(mock):
 
 
 def test_explain_paper_repairs_bad_citation_from_mock_llm(mock):
-    llm = LLMClient(LLMConfig(model="mock-llm"), client=mock.client(default_headers={"X-Mock-Bad-Citation": "1"}))
+    llm = LLMClient(LLMConfig(model="mock-llm"), client=mock.client(headers={"X-Mock-Bad-Citation": "1"}))
     result = explain_paper(llm)
     assert "appendix_b" not in result.citations
 

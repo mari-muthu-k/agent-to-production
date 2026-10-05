@@ -32,4 +32,5 @@ def test_fit_sections_respects_budget():
 def test_truncate_and_estimates():
     assert count_tokens(truncate_to_tokens(PAPER["sections"]["abstract"], 10)) <= 10
     assert estimate_tokens_from_words(8000) == 10666
+    assert cost_usd({"prompt_tokens": 1_000_000, "completion_tokens": 500_000}, 0.5, 2.0) == 1.5
     assert cost_usd(NS(prompt_tokens=1_000_000, completion_tokens=500_000), 0.5, 2.0) == 1.5

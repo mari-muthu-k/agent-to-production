@@ -1,26 +1,42 @@
-"""OpenRouter specifics, on top of the plain OpenAI SDK (OpenRouter is OpenAI-compatible).
+"""OpenRouter helpers around llm_client.OpenRouterClient (plain HTTP with `requests`, no SDK).
 
-Configuration is unchanged: LLM_BASE_URL=https://openrouter.ai/api/v1, LLM_API_KEY=<OpenRouter key>,
-LLM_MODEL=<vendor/model>, e.g. nvidia/nemotron-3-ultra-550b-a55b:free.
+Configuration (unchanged names, read at call time, so they can change mid-session):
+    LLM_BASE_URL   https://openrouter.ai/api/v1
+    LLM_API_KEY    your OpenRouter key (sk-or-...)
+    LLM_MODEL      one model, or a comma-separated list tried in order, e.g.
+                   "nvidia/nemotron-3-ultra-550b-a55b:free,meta-llama/llama-3.3-70b-instruct:free"
+    LLM_FALLBACK_MODEL, EMBED_MODEL
 
-What differs from OpenAI, and what this module helps with:
-- Reasoning is a request option, `reasoning`, sent with the SDK's `extra_body`:
-      {"enabled": True} | {"enabled": False} | {"effort": "low"|"medium"|"high"} | {"max_tokens": 2000}
-- Reasoning tokens are OUTPUT tokens and count toward max_tokens. A small max_tokens on a reasoning
-  model can return EMPTY content with finish_reason="length".
-- The reply carries `reasoning` (text) and `reasoning_details` (structured). When you send the
-  assistant turn back (follow-ups, repairs, tool loops), include `reasoning_details` unmodified.
-- Free models (`:free`) allow 20 requests/minute and 50 requests/day without purchased credits
-  (1000/day with at least $10 of credits). Over the limit: HTTP 429 with X-RateLimit-* headers.
+Free models (`:free`): 20 requests/minute, and 50 requests/day per account without purchased credits
+(1000/day with $10+ of credits). The daily cap is per account, so switching models does not reset it;
+switching does help when one free model is congested ("rate-limited upstream") or offline.
+
+Reasoning: `"reasoning": {"enabled": True|False}` or `{"effort": "low"}` in the JSON body. Reasoning tokens
+are output tokens and count toward max_tokens. Send `reasoning_details` back unmodified in follow-ups.
 """
+import json
 import os
+from collections.abc import Iterator
 from typing import Optional
 
-from openai import OpenAI
+import requests
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-APP_URL = "https://mari-muthu-k.github.io/agent-to-production/"
-APP_TITLE = "Paper Summarizer Workshop"
+from paper_agent.llm_client import (  # noqa: F401  (re-exported: one import for notebooks)
+    OPENROUTER_URL,
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    OpenRouterClient,
+    PaymentRequiredError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServerError,
+    api_error,
+    env_models,
+)
 
 REASONING_OFF = {"enabled": False}
 REASONING_ON = {"enabled": True}
@@ -30,54 +46,100 @@ def is_openrouter(base_url: Optional[str] = None) -> bool:
     return "openrouter.ai" in (base_url or os.environ.get("LLM_BASE_URL") or "")
 
 
-def make_client(api_key: Optional[str] = None, base_url: Optional[str] = None, **kwargs) -> OpenAI:
-    """An OpenAI SDK client for LLM_BASE_URL. On OpenRouter it adds the optional app-attribution
-    headers (they label your requests on openrouter.ai; no effect on results)."""
-    base_url = base_url or os.environ.get("LLM_BASE_URL")
-    kwargs.setdefault("max_retries", 0)          # one retry layer: ours (Day 1)
-    if is_openrouter(base_url):
-        kwargs["default_headers"] = {"HTTP-Referer": APP_URL, "X-Title": APP_TITLE,
-                                     **(kwargs.get("default_headers") or {})}
-    return OpenAI(api_key=api_key or os.environ.get("LLM_API_KEY"), base_url=base_url, **kwargs)
+def make_client(api_key: Optional[str] = None, base_url: Optional[str] = None, **kwargs) -> OpenRouterClient:
+    return OpenRouterClient(api_key=api_key, base_url=base_url, **kwargs)
 
 
-def reasoning_body(reasoning: Optional[dict], extra_body: Optional[dict] = None) -> Optional[dict]:
-    """extra_body for the SDK with OpenRouter's `reasoning` option merged in."""
-    if reasoning is None:
-        return extra_body
-    return {**(extra_body or {}), "reasoning": reasoning}
+# --- switching models -------------------------------------------------------------
+def use_model(model: str, fallback: Optional[str] = None) -> list:
+    """Switch the chat model(s) for everything that reads LLM_MODEL, from now on (no restart).
+    `model` may be a comma-separated list; returns the list now in use."""
+    os.environ["LLM_MODEL"] = model
+    if fallback is not None:
+        os.environ["LLM_FALLBACK_MODEL"] = fallback
+    return current_models()
 
 
-def _get(obj, name):
-    if isinstance(obj, dict):
-        return obj.get(name)
-    value = getattr(obj, name, None)
-    if value is None and getattr(obj, "model_extra", None):
-        value = obj.model_extra.get(name)
-    return value
+def current_models() -> list:
+    return env_models("LLM_MODEL") + [m for m in env_models("LLM_FALLBACK_MODEL") if m not in env_models("LLM_MODEL")]
 
 
-def assistant_turn(message, content: Optional[str] = None) -> dict:
-    """The assistant message to send back in the next request, with reasoning_details passed back
-    unmodified (OpenRouter needs them to continue the model's reasoning) and tool calls kept."""
-    turn = {"role": "assistant", "content": _get(message, "content") if content is None else content}
-    details = _get(message, "reasoning_details")
-    if details:
-        turn["reasoning_details"] = [d if isinstance(d, dict) else d.model_dump() if hasattr(d, "model_dump")
-                                     else dict(d) for d in details]
-    tool_calls = _get(message, "tool_calls")
-    if tool_calls:
-        turn["tool_calls"] = [t if isinstance(t, dict) else t.model_dump() for t in tool_calls]
+def list_models(client: Optional[OpenRouterClient] = None, free_only: bool = True, needs: tuple = (),
+                embeddings: bool = False) -> list:
+    """Models from GET /models (public, no key needed), optionally only `:free` ones supporting every
+    parameter in `needs` (e.g. ("tools",) or ("response_format",)). Most context first."""
+    client = client or OpenRouterClient()
+    url = f"{client.base_url}/models" + ("?output_modalities=embeddings" if embeddings else "")
+    r = requests.get(url, headers=client.headers(), timeout=client.timeout)
+    if r.status_code >= 400:
+        raise api_error(r, r.json() if r.content else None)
+    rows = []
+    for m in r.json().get("data", []):
+        params = set(m.get("supported_parameters") or [])
+        if free_only and is_openrouter(client.base_url) and not m["id"].endswith(":free"):
+            continue
+        if needs and not set(needs) <= params:
+            continue
+        rows.append({"id": m["id"], "context_length": m.get("context_length"), "parameters": sorted(params)})
+    return sorted(rows, key=lambda m: -(m["context_length"] or 0))
+
+
+def free_models(needs: tuple = (), client: Optional[OpenRouterClient] = None) -> list:
+    """IDs of free chat models that support `needs`; pick one and call use_model(...)."""
+    return [m["id"] for m in list_models(client, free_only=True, needs=needs)]
+
+
+def key_info(client: Optional[OpenRouterClient] = None) -> dict:
+    """GET /key: credits used, limit and whether this is a free-tier key."""
+    client = client or OpenRouterClient()
+    r = requests.get(f"{client.base_url}/key", headers=client.headers(), timeout=client.timeout)
+    if r.status_code >= 400:
+        raise api_error(r, r.json() if r.content else None)
+    return r.json().get("data", {})
+
+
+# --- requests and replies -----------------------------------------------------------
+def stream_chat(client: Optional[OpenRouterClient] = None, **body) -> Iterator[dict]:
+    """POST /chat/completions with "stream": true and yield each server-sent event (a dict).
+    OpenRouter also sends ': OPENROUTER PROCESSING' keep-alive comments; they are skipped."""
+    client = client or OpenRouterClient()
+    with requests.post(f"{client.base_url}/chat/completions", json={**body, "stream": True},
+                       headers=client.headers(), timeout=client.timeout, stream=True) as r:
+        if r.status_code >= 400:
+            raise api_error(r, r.json() if r.content else None)
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data = line[len("data: "):]
+            if data == "[DONE]":
+                return
+            event = json.loads(data)
+            if "error" in event:
+                raise APIError(f"stream error: {event['error'].get('message')}", body=event)
+            yield event
+
+
+def text_of(reply: dict) -> Optional[str]:
+    """The assistant's text from a /chat/completions reply."""
+    return reply["choices"][0]["message"].get("content")
+
+
+def assistant_turn(message: dict, content: Optional[str] = None) -> dict:
+    """The assistant message to send back in the next request: reasoning_details passed back unmodified
+    (OpenRouter needs them to continue the model's reasoning) and tool calls kept."""
+    turn = {"role": "assistant", "content": message.get("content") if content is None else content}
+    for key in ("reasoning_details", "tool_calls"):
+        if message.get(key):
+            turn[key] = message[key]
     return turn
 
 
-def reasoning_text(message) -> Optional[str]:
-    return _get(message, "reasoning")
+def reasoning_text(message: dict) -> Optional[str]:
+    return message.get("reasoning")
 
 
-def reasoning_tokens(usage) -> int:
-    details = _get(usage, "completion_tokens_details") if usage is not None else None
-    return int((_get(details, "reasoning_tokens") if details is not None else 0) or 0)
+def reasoning_tokens(usage: Optional[dict]) -> int:
+    return int(((usage or {}).get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
 
 
 def rate_limit_message(exc: Exception) -> str:
@@ -87,5 +149,5 @@ def rate_limit_message(exc: Exception) -> str:
     msg = "rate limited (HTTP 429)"
     if limit is not None:
         msg += f": limit {limit}, remaining {remaining}"
-    return msg + (". Free models allow 20 requests/minute and 50/day without credits "
-                  "(1000/day with $10+ of credits).")
+    return msg + (". Free models: 20 requests/minute and 50/day without credits (1000/day with $10+). "
+                  "Try another model with use_model(...), or wait.")

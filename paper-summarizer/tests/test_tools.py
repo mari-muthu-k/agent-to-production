@@ -23,7 +23,7 @@ def test_check_gateway_all_ok_against_mock(mock):
 
 def test_check_gateway_reports_max_tokens_quirk(mock):
     cg = load("check_gateway")
-    client = mock.client(default_headers={"X-Mock-Reject-Params": "max_tokens"})
+    client = mock.client(headers={"X-Mock-Reject-Params": "max_tokens"})
     results = cg.run_checks(client, "mock-llm", None)
     by = {r.name: r.status for r in results}
     assert by["max_tokens"] == "unsupported" and by["max_completion_tokens"] == "ok"

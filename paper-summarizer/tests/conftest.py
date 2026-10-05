@@ -9,11 +9,10 @@ import threading
 import time
 from pathlib import Path
 
-import httpx
 import pytest
-from openai import OpenAI
+import requests
 
-from paper_agent.llm_client import CALL_LOG
+from paper_agent.llm_client import CALL_LOG, OpenRouterClient
 
 ROOT = Path(__file__).resolve().parents[1]
 MOCK_KEY = "sk-mock-local"
@@ -30,7 +29,7 @@ def mock_url():
     """Base URL of a running mock-llm (without /v1)."""
     url = os.environ.get("MOCK_BASE_URL")
     if url:
-        httpx.get(f"{url}/health", timeout=5).raise_for_status()
+        requests.get(f"{url}/health", timeout=5).raise_for_status()
         yield url.rstrip("/")
         return
     import uvicorn
@@ -63,17 +62,23 @@ class MockControl:
         self.v1 = f"{url}/v1"
 
     def reset(self):
-        httpx.post(f"{self.url}/mock/reset", timeout=5).raise_for_status()
+        requests.post(f"{self.url}/mock/reset", timeout=5).raise_for_status()
 
     def fault(self, **fault):
-        httpx.post(f"{self.url}/mock/faults", json=fault, timeout=5).raise_for_status()
+        requests.post(f"{self.url}/mock/faults", json=fault, timeout=5).raise_for_status()
 
     def stats(self) -> dict:
-        return httpx.get(f"{self.url}/mock/stats", timeout=5).json()
+        return requests.get(f"{self.url}/mock/stats", timeout=5).json()
 
-    def client(self, **kwargs) -> OpenAI:
+    def client(self, api_key: str = MOCK_KEY, headers=None, timeout: float = 30.0) -> OpenRouterClient:
+        """The course's HTTP client (requests), pointed at the mock."""
+        return OpenRouterClient(api_key=api_key, base_url=self.v1, headers=headers, timeout=timeout)
+
+    def openai_client(self, **kwargs):
+        """The official OpenAI SDK: only to prove the mock stays OpenAI-compatible."""
+        from openai import OpenAI
         kwargs.setdefault("api_key", MOCK_KEY)
-        kwargs.setdefault("max_retries", 0)   # tests check our retries, never the SDK's
+        kwargs.setdefault("max_retries", 0)
         return OpenAI(base_url=self.v1, **kwargs)
 
 

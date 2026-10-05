@@ -4,16 +4,15 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
-import openai
 import pytest
 
 from paper_agent.ingest.cleaning import Block, heading, to_blocks
-from paper_agent.ingest.embeddings import EmbeddingMismatchError, HashingEmbedder, OpenAIEmbedder
+from paper_agent.ingest.embeddings import EmbeddingMismatchError, HashingEmbedder, OpenRouterEmbedder
 from paper_agent.ingest.loaders import load_pdf
 from paper_agent.ingest.pipeline import ingest_pdf
 from paper_agent.ingest.splitters import chunk_stats, fixed_chunks, semantic_chunks, sentence_chunks
 from paper_agent.ingest.store import ChromaStore, NumpyStore, collection_name, top_k
-from paper_agent.llm_client import CALL_LOG
+from paper_agent.llm_client import CALL_LOG, NotFoundError
 from paper_agent.papers import edge_case_pdf, fetch_paper, paper_ids, registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,8 +132,8 @@ def test_different_models_live_in_different_spaces():
     assert abs(float(a.embed(text)[0] @ b.embed(text)[0])) < 0.3
 
 
-def test_openai_embedder_against_mock(mock):
-    emb = OpenAIEmbedder("mock-embed", client=mock.client(), batch_size=2)
+def test_openrouter_embedder_against_mock(mock):
+    emb = OpenRouterEmbedder("mock-embed", client=mock.client(), batch_size=2)
     v = emb.embed(["a", "b", "c", "a"])
     assert v.shape == (4, 256) and np.allclose(v[0], v[3])
     assert mock.stats()["embedding_requests"] == 2            # 3 unique texts, batches of 2
@@ -143,15 +142,15 @@ def test_openai_embedder_against_mock(mock):
     assert mock.stats()["embedding_requests"] == 2            # cached
 
 
-def test_openai_embedder_retries_429(mock, no_sleep):
+def test_openrouter_embedder_retries_429(mock, no_sleep):
     mock.fault(status=429, retry_after=2, count=1, endpoint="embeddings")
-    emb = OpenAIEmbedder("mock-embed", client=mock.client())
+    emb = OpenRouterEmbedder("mock-embed", client=mock.client())
     assert emb.embed(["pass@1"]).shape == (1, 256) and no_sleep == [2.0]
 
 
-def test_openai_embedder_does_not_retry_400(mock, no_sleep):
-    emb = OpenAIEmbedder("no-such-embedding-model", client=mock.client())
-    with pytest.raises(openai.NotFoundError):
+def test_openrouter_embedder_does_not_retry_400(mock, no_sleep):
+    emb = OpenRouterEmbedder("no-such-embedding-model", client=mock.client())
+    with pytest.raises(NotFoundError):
         emb.embed(["x"])
     assert no_sleep == []
 

@@ -28,27 +28,24 @@ if importlib.util.find_spec("paper_agent") is None:      # Colab: install the co
 
 import logging, os, re, time, json
 import numpy as np
-import openai
 from paper_agent.config import load_env
-from paper_agent.llm_client import LLMClient, LLMConfig, summarize_calls
-from paper_agent.ingest.embeddings import OpenAIEmbedder
-from paper_agent.openrouter import make_client, is_openrouter, REASONING_OFF
+from paper_agent.llm_client import LLMClient, LLMConfig, OpenRouterClient, BadRequestError, summarize_calls
+from paper_agent.ingest.embeddings import OpenRouterEmbedder
+from paper_agent.openrouter import REASONING_OFF, current_models, use_model, free_models
 
 # Colab Secrets (🔑) or .env: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBED_MODEL (+ optional LLM_FALLBACK_MODEL)
-# OpenRouter: LLM_BASE_URL=https://openrouter.ai/api/v1, e.g. EMBED_MODEL=nvidia/nemotron-3-embed-1b:free
+# OpenRouter: LLM_BASE_URL=https://openrouter.ai/api/v1. LLM_MODEL may list several free models, comma-separated.
 env = load_env(required=("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "EMBED_MODEL"))
-MODEL, EMBED_MODEL = env["LLM_MODEL"], env["EMBED_MODEL"]
-PRICE_IN_PER_1M, PRICE_OUT_PER_1M = 0.50, 2.00   # USD per 1M tokens (illustrative: the instructor gives real ones)
+EMBED_MODEL = env["EMBED_MODEL"]           # fixed for the whole index (switching it means re-embedding)
+PRICE_IN_PER_1M, PRICE_OUT_PER_1M = 0.50, 2.00   # USD per 1M tokens (":free" models cost $0; these show the maths)
 PRICE_EMBED_PER_1M = 0.02
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s", force=True)
 
-client = make_client(env["LLM_API_KEY"], env["LLM_BASE_URL"])     # OpenAI SDK; works with OpenRouter
-REASONING = REASONING_OFF if is_openrouter() else None   # short grounded answers don't need long thinking
-llm = LLMClient(LLMConfig(model=MODEL, fallback_model=env.get("LLM_FALLBACK_MODEL") or None,
-                          price_in_per_1m=PRICE_IN_PER_1M, price_out_per_1m=PRICE_OUT_PER_1M,
+client = OpenRouterClient()              # OpenRouter's HTTP API with requests; reads LLM_* at every call
+llm = LLMClient(LLMConfig(price_in_per_1m=PRICE_IN_PER_1M, price_out_per_1m=PRICE_OUT_PER_1M,
                           max_tokens_param=env.get("LLM_MAX_TOKENS_PARAM") or "max_tokens",
-                          reasoning=REASONING), client=client)
-embedder = OpenAIEmbedder(EMBED_MODEL, client=client, price_per_1m=PRICE_EMBED_PER_1M)
+                          reasoning=REASONING_OFF), client=client)   # chat model: LLM_MODEL, re-read every call
+embedder = OpenRouterEmbedder(EMBED_MODEL, client=client, price_per_1m=PRICE_EMBED_PER_1M)
 
 from paper_agent.papers import fetch_paper, paper_ids, paper_info, edge_case_pdf
 PAPERS = {{pid: fetch_paper(pid) for pid in paper_ids()}}      # 4 real papers, CC BY 4.0
@@ -92,15 +89,20 @@ def practice() -> Notebook:
         Colab **Secrets** (🔑, Notebook access ON): `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, **`EMBED_MODEL`** (new today).
         The first run installs the course package (about a minute).
 
-        > **OpenRouter:** `LLM_BASE_URL` = `https://openrouter.ai/api/v1`; for embeddings use e.g.
-        > `nvidia/nemotron-3-embed-1b:free` or `openai/text-embedding-3-small`. Free (`:free`) models allow
-        > 20 requests/minute and 50/day without credits, so today's notebook batches its embedding calls.
+        > **OpenRouter, called directly over HTTP:** `LLM_BASE_URL` = `https://openrouter.ai/api/v1`; for
+        > embeddings use e.g. `nvidia/nemotron-3-embed-1b:free`. Free (`:free`) models allow 20 requests/minute
+        > and 50/day per account without credits, so today's notebook batches its embedding calls.
+        >
+        > **🔁 Switching chat models** (a free model is busy or capped): `use_model("vendor/model:free")`, any
+        > time, no restart. `LLM_MODEL` may also list several (`a:free,b:free`); the next is used automatically.
+        > `free_models(("tools",))` lists candidates. Keep `EMBED_MODEL` fixed: changing it means re-indexing.
     """)
     nb.code(SETUP + '\nfor pid in PAPERS:\n    info = paper_info(pid)\n    print(f"{pid:11} {info[\'pages\']:>2} pages  '
-            '{info[\'title\'][:58]}  ({info[\'license\']})")\nprint("✅ ready | chat:", MODEL, "| embeddings:", '
+            '{info[\'title\'][:58]}  ({info[\'license\']})")\nprint("✅ ready | chat:", current_models(), "| embeddings:", '
             'EMBED_MODEL)')
     nb.md("### 3.2 A naive RAG in ten lines\n\nFixed 300-character chunks, top-3 by cosine, everything into the prompt.")
-    nb.code("from paper_agent.ingest.loaders import load_pdf\n"
+    nb.code("from typing import Optional\nfrom paper_agent.ingest.loaders import load_pdf\n"
+            "from paper_agent.llm_client import env_models\n"
             f"NAIVE_PROMPT = {NAIVE_PROMPT!r}\n\n" + src(naive_chunks, naive_search, naive_answer))
     nb.code(r'''
         text = load_pdf(PAPERS["mistral-7b"], layout="naive").text      # read every page straight across
@@ -110,7 +112,7 @@ def practice() -> Notebook:
         hits = naive_search(question, naive, naive_matrix, embedder.embed, k=3)
         for score, chunk in hits:
             print(f"{score:.2f}  {chunk[:90]!r}")
-        print("\n🤖", naive_answer(question, [c for _, c in hits], client, MODEL))
+        print("\n🤖", naive_answer(question, [c for _, c in hits], client))
     ''')
     nb.md("It probably worked. **That's the trap.** Five ways to break it:\n\n### 3.3 💥 Failure 1: bad chunking (and bad parsing before it)")
     nb.code(r'''
@@ -145,18 +147,18 @@ def practice() -> Notebook:
         print(f"all 4 papers: {n:,} tokens  ->  ${n * PRICE_IN_PER_1M / 1e6:.4f} per question, "
               f"${n * PRICE_IN_PER_1M / 1e6 * 20 * 200:,.2f} for 20 questions x 200 people")
         try:
-            r = client.chat.completions.create(model=MODEL, max_tokens=60, messages=[
+            r = client.chat(model=current_models()[0], max_tokens=60, messages=[
                 {"role": "user", "content": everything + "\n\nQuestion: " + question}])
-            print(f"Accepted ({r.usage.prompt_tokens:,} prompt tokens). It fits this model, but you pay for all of it "
+            print(f"Accepted ({r['usage']['prompt_tokens']:,} prompt tokens). It fits this model, but you pay for all of it "
                   "on every question, and answers buried mid-context are often missed.")
-        except openai.BadRequestError as e:
+        except BadRequestError as e:
             print("💥", type(e).__name__, "-", e.message[:170])
     ''')
     nb.md("**Fixed in 6.3:** send only the best chunks that fit a token budget.\n\n### 3.7 💥 Failure 5: hallucination")
     nb.code(r'''
         unanswerable = "Which GPU cloud provider sponsored the training run?"
         hits = naive_search(unanswerable, naive, naive_matrix, embedder.embed, k=3)
-        answer = naive_answer(unanswerable, [c for _, c in hits], client, MODEL)
+        answer = naive_answer(unanswerable, [c for _, c in hits], client)
         print("🤖", answer)
         numbers = re.findall(r"\d[\d.,]*\d|\d", answer)
         print("\nnumbers in the answer:", numbers, "| actually in the paper:", [x for x in numbers if x in text])
@@ -472,7 +474,7 @@ def demo() -> Notebook:
 
         **Rehearsal tip:** run D2.1 the day before and note what your model claims without RAG.
     """)
-    nb.code(SETUP + '\nprint("✅ ready | chat:", MODEL, "| embeddings:", EMBED_MODEL)')
+    nb.code(SETUP + '\nprint("✅ ready | chat:", current_models(), "| embeddings:", EMBED_MODEL)')
 
     nb.md("---\n## D1 Recap: text becomes vectors  ·  *slide: \"Similar meaning, nearby vectors\"*\n\n"
           "### D1.1 Cosine similarity between AI phrases")
@@ -499,9 +501,9 @@ def demo() -> Notebook:
     nb.md("---\n## D2 What RAG is  ·  *slide: \"Retrieve, then answer\"*\n\n### D2.1 Without RAG: ask about a paper the model never saw")
     nb.code(r'''
         q = "In the Ragas paper, how often did Ragas agree with human annotators on faithfulness?"
-        r = client.chat.completions.create(model=MODEL, max_tokens=120, temperature=0,
+        r = client.chat(model=current_models()[0], max_tokens=120, temperature=0, reasoning=REASONING_OFF,
                                            messages=[{"role": "user", "content": q}])
-        print("🤖 (no context):", r.choices[0].message.content)
+        print("🤖 (no context):", r["choices"][0]["message"]["content"])
     ''')
     nb.md("### D2.2 With RAG: retrieve, then answer from the pages, with citations")
     nb.code(r'''
