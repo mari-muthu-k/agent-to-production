@@ -180,3 +180,19 @@ def test_missing_key_message_mentions_both(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match=r"LLM_API_KEY \(or GEMINI_API_KEY\)"):
         load_env()
+
+
+def test_reasoning_field_not_sent_to_google(monkeypatch):
+    sent = {}
+
+    def fake_post(self, path, body, headers=None, timeout=None):
+        sent.update(body)
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+
+    monkeypatch.setattr(OpenRouterClient, "post", fake_post)
+    monkeypatch.setenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+    LLMClient(LLMConfig(model="gemini-2.5-flash", reasoning=REASONING_OFF)).chat(STRAWBERRY)
+    assert "reasoning" not in sent and sent["model"] == "gemini-2.5-flash"
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    LLMClient(LLMConfig(model="x:free", reasoning=REASONING_OFF)).chat(STRAWBERRY)
+    assert sent["reasoning"] == {"enabled": False}

@@ -68,3 +68,4 @@ ignore = [
 "paper_agent/explain.py" = ["E501"]
 # Notebook text (markdown tables, cell code) is laid out for the rendered notebook, not for 120 columns.
 "notebook_templates/*" = ["E501"]
+"tools/sync_day1_llm_client.py" = ["E501"]   # holds verbatim lines of llm_client.py

@@ -3,7 +3,7 @@ COMPOSE := docker compose
 RUN := $(COMPOSE) run --rm
 
 .DEFAULT_GOAL := help
-.PHONY: help env build up down test lint mock gateway notebooks exec-notebooks check-gateway lock logs clean
+.PHONY: help env build up down sync-day1 test lint mock gateway notebooks exec-notebooks check-gateway lock logs clean
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ gateway: env  ## Start the LiteLLM gateway (rehearsal profile) on http://localho
 
 notebooks: env  ## Regenerate the Day 2+ notebooks from templates (Day 1 is edited by hand, never touched)
 	$(RUN) --no-deps tests python tools/build_notebooks.py
+
+sync-day1: env  ## Copy paper_agent/llm_client.py into the Day 1 Practice notebook's llm_client cells
+	$(RUN) --no-deps tests python tools/sync_day1_llm_client.py
 
 exec-notebooks: env  ## Execute every notebook against mock-llm; fail on any unexpected error
 	$(RUN) tests python tools/exec_notebooks.py

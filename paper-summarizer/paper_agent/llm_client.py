@@ -157,8 +157,13 @@ class OpenRouterClient:
             raise api_error(r, data)
         return data
 
+    def is_google(self) -> bool:
+        return "googleapis.com" in self.base_url
+
     def chat(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
         """POST /chat/completions. `body` is the JSON request: model, messages, max_tokens, ..."""
+        if self.is_google():
+            body.pop("reasoning", None)   # OpenRouter's switch; Gemini doesn't use it
         return self.post("chat/completions", body, headers, timeout)
 
     def embeddings(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
