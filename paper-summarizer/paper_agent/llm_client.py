@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError
 logger = logging.getLogger("llm_client")
 T = TypeVar("T", bound=BaseModel)
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"   # Gemini's OpenAI-compatible API
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +110,7 @@ class OpenRouterClient:
     """POSTs JSON to OpenRouter (or any OpenAI-compatible URL) and returns the JSON reply as a dict.
 
     The key and URL come from LLM_API_KEY / LLM_BASE_URL at call time unless given here.
+    With GEMINI_API_KEY set, Google URLs use that key (and LLM_BASE_URL defaults to Gemini).
     """
 
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None,
@@ -122,10 +124,19 @@ class OpenRouterClient:
 
     @property
     def base_url(self) -> str:
-        return (self._base_url or os.environ.get("LLM_BASE_URL") or OPENROUTER_URL).rstrip("/")
+        default = GEMINI_URL if os.environ.get("GEMINI_API_KEY") else OPENROUTER_URL
+        return (self._base_url or os.environ.get("LLM_BASE_URL") or default).rstrip("/")
+
+    def auth_headers(self) -> dict:
+        """Google URL + GEMINI_API_KEY: send it as x-goog-api-key, and as Bearer too, because Gemini's
+        OpenAI-compatible endpoint requires the Authorization header. Otherwise: Bearer LLM_API_KEY."""
+        gemini = os.environ.get("GEMINI_API_KEY")
+        if gemini and not self._api_key and "googleapis.com" in self.base_url:
+            return {"x-goog-api-key": gemini, "Authorization": f"Bearer {gemini}"}
+        return {"Authorization": f"Bearer {self.api_key}"}
 
     def headers(self, extra: Optional[dict] = None) -> dict:
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+        return {**self.auth_headers(), "Content-Type": "application/json",
                 "HTTP-Referer": "https://mari-muthu-k.github.io/agent-to-production/",   # optional app attribution
                 "X-Title": "Paper Summarizer Workshop", **self.extra_headers, **(extra or {})}
 

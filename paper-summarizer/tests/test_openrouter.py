@@ -143,3 +143,40 @@ def test_rate_limit_message_reads_openrouter_headers(mock):
 def test_bad_reasoning_type_is_400(mock):
     with pytest.raises(BadRequestError, match="reasoning"):
         mock.client().chat(model="m", max_tokens=5, messages=STRAWBERRY, reasoning="yes")
+
+
+# --- Gemini: GEMINI_API_KEY ----------------------------------------------------------
+def test_gemini_key_used_for_google_urls(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-or-test")
+    monkeypatch.setenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+    h = OpenRouterClient().headers()
+    assert h["x-goog-api-key"] == "AIza-test" and h["Authorization"] == "Bearer AIza-test"
+
+
+def test_gemini_key_never_sent_to_openrouter(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-or-test")
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    h = OpenRouterClient().headers()
+    assert h["Authorization"] == "Bearer sk-or-test" and "x-goog-api-key" not in h
+
+
+def test_gemini_key_alone_defaults_to_gemini_url(monkeypatch):
+    from paper_agent.config import load_env
+    from paper_agent.llm_client import GEMINI_URL
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    monkeypatch.setenv("LLM_MODEL", "gemini-2.5-flash")
+    assert OpenRouterClient().base_url == GEMINI_URL
+    env = load_env()
+    assert env["LLM_BASE_URL"] == GEMINI_URL and env["GEMINI_API_KEY"] == "AIza-test"
+
+
+def test_missing_key_message_mentions_both(monkeypatch):
+    from paper_agent.config import load_env
+    for name in ("LLM_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(RuntimeError, match=r"LLM_API_KEY \(or GEMINI_API_KEY\)"):
+        load_env()

@@ -262,7 +262,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--model", help="model to probe instead of LLM_MODEL")
     args = parser.parse_args()
-    missing = [n for n in ("LLM_BASE_URL", "LLM_API_KEY") if not os.environ.get(n)]
+    missing = [] if os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY") else ["LLM_API_KEY"]
     model = args.model or (env_models("LLM_MODEL") or [None])[0]
     if missing or not model:
         print("missing:", ", ".join(missing + ([] if model else ["LLM_MODEL"])))
