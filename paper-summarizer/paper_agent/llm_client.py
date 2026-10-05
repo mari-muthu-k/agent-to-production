@@ -282,7 +282,9 @@ class LLMClient:
             primary = split(self.config.model)
         else:                                   # models from the environment, re-read on every call
             primary, fallbacks = env_models("LLM_MODEL"), fallbacks or env_models("LLM_FALLBACK_MODEL")
-        ordered = list(dict.fromkeys(primary + fallbacks))
+        # A fallback keeps its own attempt even if it has the primary's name: the fallback client may be
+        # another provider, and with no LLM_FALLBACK_MODEL the course reuses the primary's name on purpose.
+        ordered = list(dict.fromkeys(primary)) + list(dict.fromkeys(fallbacks))
         usable = [m for m in ordered if m not in self.exhausted]
         if not ordered:
             raise ValueError("no model configured: set LLM_MODEL (one model, or a comma-separated list)")

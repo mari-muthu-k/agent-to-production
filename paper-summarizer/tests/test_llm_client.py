@@ -346,3 +346,13 @@ def test_http_errors_map_to_classes(mock):
         mock.client(timeout=0.2).chat(model="m", max_tokens=5, messages=MSG, headers={"X-Mock-Delay-Ms": "2000"})
     with pytest.raises(APIConnectionError):
         type(client)(api_key="k", base_url="http://127.0.0.1:9/v1").chat(model="m", messages=MSG)
+
+
+def test_fallback_with_the_same_model_name_still_gets_its_attempt(no_sleep):
+    """Day 1 3.8 without LLM_FALLBACK_MODEL: the fallback reuses the primary's name on another client."""
+    primary = FakeLLM([TransientError()] * 5)
+    backup = FakeLLM([fake_response("from fallback")])
+    llm = LLMClient(LLMConfig(model="gemini-x", fallback_model="gemini-x", max_retries=1, base_delay_s=0.01),
+                    client=primary, fallback_client=backup)
+    assert llm.chat(MSG) == "from fallback" and backup.calls == 1
+    assert CALL_LOG[-1].status == "fallback_ok" and CALL_LOG[-1].model == "gemini-x"
