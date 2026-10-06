@@ -64,12 +64,15 @@ services:
       LLM_MODEL: mock-llm
       LLM_FALLBACK_MODEL: mock-llm-fallback
       EMBED_MODEL: mock-embed
+      OTHER_EMBED_MODEL: mock-embed-v2   # Day 2, 8.4: a second embedding model with the same vector length
       MOCK_BASE_URL: http://mock-llm:8000
       NO_PROXY: localhost,127.0.0.1,mock-llm
       NOTEBOOKS_DIR: /notebooks
+      COURSE_REPO: /course          # Day 2 setup cells copy course files from here instead of GitHub
     volumes:
       - ./:/workspace
       - ../notebooks:/notebooks     # the Colab notebooks live at the course repo root
+      - ../:/course:ro              # the whole course repo, read-only (Day 2 setup: fetch())
     depends_on:
       mock-llm:
         condition: service_healthy

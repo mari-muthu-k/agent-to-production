@@ -23,10 +23,23 @@ You need a Google account to use Google Colab. A personal account works fine.
 
 ## 3. Get an LLM API key
 
-The labs work with any of the supported providers. Free tiers are enough for this
-course — see the repository README for a list of providers with free tiers.
+The labs work with **any OpenAI-compatible provider that has a free tier and an embedding model**.
+Free tiers are enough for this course. Two that work well:
 
-<!-- TODO: Mari — confirm the recommended provider and model for the labs -->
+| Setting (Colab Secret) | What it is | Google Gemini | OpenRouter |
+|---|---|---|---|
+| `LLM_BASE_URL` | The API's address | `https://generativelanguage.googleapis.com/v1beta/openai` | `https://openrouter.ai/api/v1` |
+| `LLM_API_KEY` | Your key | Google AI Studio → **Get API key** | openrouter.ai → **Keys** (starts `sk-or-`) |
+| `LLM_MODEL` | The chat model | A Gemini chat model from the AI Studio model list | A model whose id ends in `:free` |
+| `LLM_FALLBACK_MODEL` | Used when the first model is busy or out of its daily quota | A second Gemini chat model | A second `:free` model |
+| `EMBED_MODEL` | The embedding model (from Day 2) | A Gemini model whose name contains `embedding` | An embedding model (openrouter.ai/models, filter: embeddings) |
+
+Model names change often: use the ones pinned in the workshop channel. The notebooks never assume a
+model name or a vector length; they print what your provider returns.
+
+!!! danger "No company data"
+    **Never put company data into free APIs.** Free tiers may log, keep or train on what you send.
+    Use the course's fictional paper or public papers (for example from arXiv), never internal documents.
 
 1. Sign up with the provider you chose.
 2. Create an API key in its dashboard.
@@ -46,8 +59,8 @@ Colab Secrets keep your key out of the notebook so it is never saved or shared w
 2. Click **Add new secret**.
 3. Set **Name** to `LLM_API_KEY` and **Value** to your key.
 4. Turn on the **Notebook access** toggle.
-5. (Optional) Add a second secret `LLM_PROVIDER` with a value such as `google`,
-   `openai`, or `anthropic`.
+5. Add `LLM_BASE_URL`, `LLM_MODEL`, `LLM_FALLBACK_MODEL` and (for Day 2) `EMBED_MODEL` the same way,
+   with the values from the table above, and turn on **Notebook access** for each.
 
 Test it in a cell:
 
@@ -64,6 +77,17 @@ print("Key loaded:", key[:4] + "…")
     Seeing `SecretNotFoundError`? The secret name must be exactly `LLM_API_KEY`
     (case-sensitive). Seeing a notebook-access error? Turn on the **Notebook access**
     toggle next to the secret, then run the cell again.
+
+## 5. Free-tier limits
+
+**Free-tier limits.** Free tiers cap requests per minute and per day, and the caps change often.
+For example, on 6 October 2026 a new Gemini project allowed 20 chat requests per day for one model, and
+counted every text sent for embedding as one request (100 per minute). So:
+
+- set `LLM_FALLBACK_MODEL`, so a busy or capped model falls back to another;
+- rehearse on a **separate key** (or project), so rehearsal doesn't use up the quota you teach with;
+- `llm_client` retries per-minute limits for you; a daily cap says so plainly
+  ("daily free-tier limit reached: switch to LLM_FALLBACK_MODEL or another key").
 
 ## You're ready
 

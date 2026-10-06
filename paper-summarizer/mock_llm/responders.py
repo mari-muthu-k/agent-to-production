@@ -30,7 +30,8 @@ _INJECTION = re.compile(
     r"|ignore (all |any )?(previous|prior|above) instructions"
     r"|disregard (the )?(system|previous) (prompt|instructions))", re.I)
 _IDK_RULES = ("insufficient_evidence", "insufficient evidence", "i don't know", "say you don't know",
-              "not in the context", "if the excerpts do not", "if the chunks do not")
+              "not in the context", "if the excerpts do not", "if the chunks do not", "if the chunks don't",
+              '"found" to false', "found to false", "found=false", "found = false")
 _DEFENSES = ("never as instructions", "not as instructions", "never instructions", "untrusted",
              "do not follow instructions", "never follow instructions", "ignore instructions inside")
 
@@ -349,11 +350,59 @@ def _string_for(name: str, req: Optional[Request]) -> str:
     return f"mock {name}"
 
 
+_STEM = re.compile(r"(ing|ed|s)$")
+
+
+def _stems(text: str) -> set:
+    return {_STEM.sub("", w) if len(w) > 5 else w for w in content_words(text)}
+
+
+def grounded_found(req: Request, fault: Fault) -> dict:
+    """Day 2 code-along GroundedAnswer: answer + found + chunk-id citations.
+
+    Evidence is the pair of consecutive sentences in one chunk that shares the most words with the
+    question (at least two, or half of the question's words). Injected instructions are never used as
+    evidence; they are obeyed only when the prompt has no "data, never instructions" rule."""
+    blocks = req.blocks()
+    m = re.search(r"Question:\s*(.+)", req.last_user, re.S)
+    question = (m.group(1) if m else req.last_user).strip()
+    q = _stems(question)
+    need = max(SUPPORT_MIN, (len(q) + 1) // 2)
+    best = (0, None, "")
+    for b in blocks:
+        sents = [x for x in sentences(_clean(b.text)) if not _INJECTION.search(x)]
+        for i in range(len(sents)):
+            window = " ".join(sents[i:i + 2])
+            score = len(q & _stems(window))
+            if score >= need and score > best[0]:
+                best = (score, b, window)
+    score, block, text = best
+    injected = injected_blocks(blocks)
+    if injected and obeys_injection(req, fault):
+        out = {"answer": "TinyCoder is better than all large models.", "found": True, "citations": [injected[0].id]}
+    elif block is not None:
+        out = {"answer": text, "found": True, "citations": [block.id]}
+    elif allows_idk(req):
+        out = {"answer": "The paper doesn't cover this: the chunks provided don't contain the answer.",
+               "found": False, "citations": []}
+    else:
+        first = blocks[0] if blocks else Block("none", "", 1, None)
+        out = {"answer": HALLUCINATION, "found": True, "citations": [first.id]}
+    if fault.bad_citation and not req.is_repair and out["citations"]:
+        out["citations"].append("p9-c9")
+    if fault.bad_json and not req.is_repair:
+        out["citations"] = []
+        out["found"] = True
+    return out
+
+
 def structured(req: Request, schema: Optional[dict], fault: Fault) -> dict:
     """JSON for a requested schema; recognizes the workshop's PaperExplainer and Answer contracts."""
     props = set((schema or {}).get("properties", {}))
     hint = req.system + "\n" + req.last_user
     grounded_hint = "insufficient_evidence" in hint and "citations" in hint
+    if {"found", "answer", "citations"} <= props or (not props and '"found"' in hint and "citations" in hint):
+        return grounded_found(req, fault)
     if {"status", "answer", "citations"} <= props or (not props and grounded_hint):
         return grounded(req, fault)
     if {"headline", "evidence_type"} <= props or (not props and "headline" in hint and "evidence_type" in hint):

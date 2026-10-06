@@ -45,7 +45,7 @@ def test_generated_practice_follows_conventions():
             continue
         cells = json.loads(path.read_text())["cells"]
         tags = [t for c in cells for t in c["metadata"].get("tags", [])]
-        assert 1 <= tags.count("todo") <= 3 and tags.count("todo") == tags.count("todo-test") == tags.count("rescue")
+        assert 1 <= tags.count("todo") <= 4 and tags.count("todo") == tags.count("todo-test") == tags.count("rescue")
         assert tags.count("catch-up") >= 2
         text = "".join("".join(c["source"]) for c in cells)
         assert "Cheatsheet" in text and "Extensions (homework)" in text and "Tomorrow" in text

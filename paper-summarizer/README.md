@@ -5,7 +5,9 @@ paper (PDF); the agent explains it in plain language and cites the section and p
 
 **The notebooks run in Google Colab**, for the instructor and participants alike. They live at the
 course repo root in `notebooks/dayN/`: `Practice.ipynb` (participants, run with the instructor) and
-`Demo.ipynb` (instructor only). In Colab, set the secrets `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`.
+`Demo.ipynb` (instructor only). In Colab, set the secrets `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`,
+`LLM_FALLBACK_MODEL` and (Day 2) `EMBED_MODEL`, for any OpenAI-compatible provider with a free tier
+(table below). **Never put company data into free APIs.**
 
 | Day | Practice | Demo |
 |---|---|---|
@@ -19,12 +21,12 @@ This Docker setup has no Jupyter server. It exists to keep the notebooks and pac
 offline tests, executing every notebook headlessly against a mock model, probing your gateway,
 and rehearsing the LiteLLM gateway. **Participants never need it.**
 
-Status: **M1** (Day 2: RAG over real PDFs). Days 3 and 4 land in M2 and M3.
+Status: **M1** (Day 2: from PDF to cited answers). Days 3 and 4 land in M2 and M3.
 
-From Day 2 on, notebooks install this package in Colab with
-`pip install "paper-agent[rag] @ git+https://github.com/mari-muthu-k/agent-to-production@main#subdirectory=paper-summarizer"`
-(the setup cell does it). **Push to `main` before class**, and consider tagging the commit you rehearsed
-with and pinning that tag in `notebook_templates/day2.py` (`INSTALL`).
+The Day 2 notebooks do **not** install this package in Colab. Cell 4.0 installs three pinned libraries
+(`pypdf`, `chromadb`, `langchain-text-splitters`) and downloads `llm_client.py`, `tinycoder.pdf`, the 4.3b
+test files and the precomputed embeddings from `main` on GitHub. **Push to `main` before class**: until
+then, Colab gets the Day 1 `llm_client.py`, which has no `embed()`.
 
 ## Quick start
 
@@ -59,7 +61,8 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 | `http://mock-llm:8000/v1` | **Offline.** The local mock answers deterministically. Free. |
 | `https://<your-gateway>/v1` | **Online.** A real OpenAI-compatible endpoint. Set `LLM_API_KEY` and `LLM_MODEL` too. |
 | `http://gateway:4000/v1` | **Online via the local LiteLLM proxy** (`make gateway`). |
-| `https://openrouter.ai/api/v1` | **OpenRouter** over plain HTTP, the provider the course uses (see below). |
+| `https://generativelanguage.googleapis.com/v1beta/openai` | **Google Gemini**'s OpenAI-compatible API (see below). |
+| `https://openrouter.ai/api/v1` | **OpenRouter** (see below). |
 
 The mock accepts any API key and model name, so you can leave your real `LLM_API_KEY` / `LLM_MODEL`
 in `.env` and flip only `LLM_BASE_URL`. The exceptions are deliberately bad values used in the error
@@ -70,26 +73,47 @@ Configuration names are the same everywhere: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM
 `LLM_FALLBACK_MODEL`, and `EMBED_MODEL` from Day 2. Locally they come from `.env` (gitignored); in
 Colab they come from Secrets. Keys are never written into code or images.
 
-## OpenRouter (plain HTTP, free models)
+## Providers: any OpenAI-compatible API with a free tier
 
-The course calls **OpenRouter's HTTP API directly with `requests`**; there is no `openai` package in the
-notebooks or in `paper_agent` (it is only a test dependency, to check the mock stays OpenAI-compatible).
-Configuration names are unchanged: `LLM_BASE_URL=https://openrouter.ai/api/v1`, `LLM_API_KEY=sk-or-...`,
-`LLM_MODEL`, optional `LLM_FALLBACK_MODEL`, and `EMBED_MODEL` (e.g. `nvidia/nemotron-3-embed-1b:free`).
+The course calls the provider's **OpenAI-compatible HTTP API directly with `requests`**; there is no
+`openai` package in the notebooks or in `paper_agent` (it is only a test dependency, to check the mock
+stays OpenAI-compatible). The same five names work for every provider:
+
+| Name | Google Gemini | OpenRouter |
+|---|---|---|
+| `LLM_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | `https://openrouter.ai/api/v1` |
+| `LLM_API_KEY` | Google AI Studio → Get API key | openrouter.ai → Keys (`sk-or-...`) |
+| `LLM_MODEL` / `LLM_FALLBACK_MODEL` | Gemini chat models from the AI Studio model list | models ending in `:free` |
+| `EMBED_MODEL` | a Gemini model whose name contains `embedding` | an embedding model (models page, filter: embeddings) |
+| `OTHER_EMBED_MODEL` *(optional)* | Day 2 cell 8.4: a second embedding model with the same vector length | same |
+| `LLM_REASONING_EFFORT` *(optional)* | default `none` for Gemini models (otherwise thinking eats `max_tokens`) | sent as OpenRouter's `reasoning` object |
+
+Nothing in the notebooks assumes a model name or a vector length: they print what the provider returns,
+and cosine similarity always divides by the vector lengths (not every provider returns unit vectors;
+`gemini-embedding-001` with a reduced `dimensions` does not).
+
+> ⚠️ **Never put company data into free APIs.**
+
+**Free-tier limits.** Free tiers cap requests per minute and per day. Observed on 6 October 2026 with a
+new Gemini project: 20 chat requests per day per model, and 100 *texts* per minute for embeddings (each
+input in a batch counts as one request). A Day 2 participant needs about 10–12 chat calls. So set
+`LLM_FALLBACK_MODEL`, and **rehearse on a separate key**. `llm_client` waits out per-minute 429s (it reads
+`Retry-After` and Gemini's `retryDelay`), and a daily cap raises `DailyQuotaError`: "daily free-tier limit
+reached: switch to LLM_FALLBACK_MODEL or another key".
 
 **Switching models (free tiers have caps).** Everything reads the `LLM_*` variables **at call time**:
 
 - `LLM_MODEL` may be one model or a comma-separated list: `model-a:free,model-b:free`. On HTTP 429, 502
   or 503 the next model is tried; in `llm_client`, a model whose daily quota or credits are gone (402, or a
   429 that resets in more than 2 minutes) is skipped for the rest of the session.
-- In a notebook: `use_model("vendor/model:free")` switches immediately, no restart.
+- In a notebook: `use_model("vendor/model")` switches immediately, no restart. On OpenRouter,
   `free_models(("tools",))` lists free models supporting given parameters. In code:
   `paper_agent.openrouter.use_model / current_models / free_models / list_models`.
 - `LLMConfig(model="")` (the default) follows the environment; `LLMConfig(model="x")` pins a model.
 - Keep `EMBED_MODEL` fixed: vectors from another model are not comparable, and the stores refuse them.
-- The free-tier **daily** cap (50 requests/day without credits, 1,000 with $10+) is **per account**, so
-  switching models does not reset it. Switching does help when a free model is congested or offline,
-  which happens often. The Day 1 code-along alone makes about 55 calls.
+- On OpenRouter, the free-tier **daily** cap is **per account**, so switching models does not reset it.
+  Switching does help when a free model is congested or offline, which happens often. The Day 1
+  code-along alone makes about 55 calls.
 
 **Where the HTTP code lives.**
 
@@ -135,11 +159,14 @@ vector store from Day 2) and `logs/` persist on the host.
   Q&A prompts get schema-valid JSON that cites only the sections that were sent.
 - **Realistic.** It honours `max_tokens` (with `finish_reason: "length"`), stop sequences, "in one
   sentence" requests, and conversation history. Latency is about 20 ms plus 2 ms per output token.
-- **Embeddings** are hashed bag-of-words vectors: texts that share words come out similar.
-  Synonyms don't, which is itself a Day 2 teaching point. The model name is the hash salt, so two
-  embedding models give incompatible vectors, as real ones do.
-- **RAG answers.** With `<chunk section=".." page="..">` context it answers from the best-matching
-  sentence and cites `(section, page)`. When nothing matches, it says "insufficient evidence" *if the
+- **Embeddings** are hashed bag-of-words vectors (1,024 numbers): texts that share words come out
+  similar. A small synonym table (`mock_llm/embeddings.py`: longer→long, learning→training, …) folds a
+  few word forms together, just enough for the Day 2 narration to hold offline. The model name is the
+  hash salt, so two embedding models (`mock-embed`, `mock-embed-v2`) give unrelated vectors of the same
+  length, as real ones do: scores near zero (Day 2, 8.4).
+- **RAG answers.** With `<chunk id=".." page="..">` context and a `found` / `citations` contract (Day 2)
+  it answers from the best-matching pair of sentences and cites chunk ids; with the older
+  `<chunk section=".." page="..">` contract it cites `(section, page)`. When nothing matches, it says "insufficient evidence" *if the
   prompt allows it*, and otherwise makes something up (the hallucination demo).
 - **OpenRouter reasoning.** `reasoning` / `reasoning_effort` switch on a deterministic "thinking" that
   is returned as `reasoning` + `reasoning_details`, reported in `usage.completion_tokens_details`, and
@@ -232,7 +259,8 @@ so a full run costs well under a cent.
 
 ```
 paper_agent/
-  llm_client.py        Day 1 reliable client + OpenRouterClient (requests); same as the Day 1 SOLUTION cell
+  llm_client.py        Day 1 reliable client + OpenRouterClient (requests), plus Day 2's embed(); a superset
+                       of the Day 1 SOLUTION cell (Day 1 is frozen: sync_day1_llm_client.py needs --force)
   schemas.py           Answer, KeyTerm, PaperExplainer
   prompts/             versioned prompt files: explainer_v1.txt
   explain.py           paper_messages, check_citations, explain_paper, show
@@ -245,14 +273,17 @@ paper_agent/
   papers.py            the sample papers: registry, fetch (local -> GitHub -> arXiv, sha256-checked)
   ingest/              Day 2: loaders (pdfplumber, column-aware), cleaning + sections, splitters
                        (fixed / LangChain sentence-aware / semantic), embedders, stores (numpy, Chroma)
-  rag/                 Day 2: retriever + threshold, grounded answers with (section, page) citations,
-                       "insufficient evidence", naive baseline, hit-rate eval
+  rag/pdf_rag.py       Day 2 code-along, with the guide's names: validate_upload, parse_pages (pypdf),
+                       clean_page, chunk_pages, embed_chunks (file-hash cache), cosine_scores, Chroma
+                       index, GroundedAnswer, ask(), ingest(), hit_rate. The notebook shows these via src()
+  rag/                 also the first Day 2 build (archived notebooks): retriever, (section, page) answers
   data/                papers.json, retrieval_golden_v1.json (10 questions)
 data/papers/           the 4 sample papers (CC BY 4.0) + MANIFEST.md
 notebook_templates/    sources of the generated notebooks (Day 2+)
 mock_llm/              the OpenAI-compatible mock
 gateway/               LiteLLM config
-tools/                 build_notebooks, nbgen, exec_notebooks, check_gateway, make_edge_case_pdfs
+tools/                 build_notebooks, nbgen, exec_notebooks, check_gateway, make_edge_case_pdfs,
+                       make_tinycoder_pdf (Day 2 paper + 4.3b files), make_precomputed_embeddings
 tests/                 offline tests (fakes + mock-llm)
 ```
 

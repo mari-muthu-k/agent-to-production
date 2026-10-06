@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 rag = [                          # Day 2
     "pdfplumber>=0.11",          # MIT; gives per-character font/colour, used for hidden-text checks
+    "pypdf>=6",                  # BSD; the Day 2 code-along parser (participants install only this)
     "langchain-text-splitters>=0.3",
     "chromadb>=1.0",
 ]
@@ -66,6 +67,7 @@ ignore = [
 "paper_agent/llm_client.py" = ["UP006", "UP035"]
 "paper_agent/fixtures/tinycoder.py" = ["E501"]
 "paper_agent/explain.py" = ["E501"]
+"paper_agent/rag/pdf_rag.py" = ["E501"]   # the TODO answer-key lines stay one line: they are typed live
 # Notebook text (markdown tables, cell code) is laid out for the rendered notebook, not for 120 columns.
 "notebook_templates/*" = ["E501"]
 "tools/sync_day1_llm_client.py" = ["E501"]   # holds verbatim lines of llm_client.py

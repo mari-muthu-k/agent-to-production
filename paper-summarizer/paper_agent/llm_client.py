@@ -134,7 +134,11 @@ def api_error(response, body) -> APIError:
         return DailyQuotaError(f"HTTP 429: {DAILY_CAP_MESSAGE} (provider said: {message[:200]})",
                                status_code=status, response=response, body=body)
     cls = STATUS_ERRORS.get(status, ServerError if status >= 500 else APIError)
-    return cls(f"HTTP {status}: {message}", status_code=status, response=response, body=body)
+    exc = cls(f"HTTP {status}: {message}", status_code=status, response=response, body=body)
+    delays = [_seconds(d.get("retryDelay")) for d in err.get("details") or [] if isinstance(d, dict)]
+    if any(delays):                       # Gemini puts the wait in the body ("retryDelay": "20s"), not a header
+        exc.retry_after = max(delays)
+    return exc
 
 
 GEMINI_MODEL = re.compile(r"(^|/)(models/)?gemini", re.IGNORECASE)
@@ -164,6 +168,7 @@ class OpenRouterClient:
                  timeout: float = 60.0, headers: Optional[dict] = None):
         self._api_key, self._base_url, self.timeout = api_key, base_url, timeout
         self.extra_headers = headers or {}
+        self._effort_for: dict = {}       # model -> the reasoning_effort it accepted
 
     @property
     def api_key(self) -> str:
@@ -214,12 +219,20 @@ class OpenRouterClient:
         """POST /chat/completions. `body` is the JSON request: model, messages, max_tokens, ..."""
         if self.is_google():
             body.pop("reasoning", None)   # OpenRouter's switch; Gemini uses reasoning_effort
-        effort = reasoning_effort(body.get("model"))
+        model = body.get("model")
+        effort = reasoning_effort(model)
         if effort and "reasoning_effort" not in body:
             if self.is_openrouter():      # OpenRouter's own form of the same setting
                 body.setdefault("reasoning", {"enabled": False} if effort == "none" else {"effort": effort})
             else:                         # the OpenAI-compatible parameter (Gemini, OpenAI, ...)
-                body["reasoning_effort"] = effort
+                body["reasoning_effort"] = self._effort_for.get(model, effort)
+                try:
+                    return self.post("chat/completions", body, headers, timeout)
+                except BadRequestError:
+                    # Some models reject "none" (Gemini's lite models do): retry once with "low", and remember it.
+                    if body["reasoning_effort"] != "none" or os.environ.get("LLM_REASONING_EFFORT"):
+                        raise
+                    body["reasoning_effort"] = self._effort_for[model] = "low"
         return self.post("chat/completions", body, headers, timeout)
 
     def embeddings(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
@@ -323,6 +336,8 @@ class LLMClient:
         self.client = client or OpenRouterClient(timeout=self.config.timeout_s)
         self.fallback_client = fallback_client or self.client
         self.breaker = CircuitBreaker(self.config.breaker_threshold, self.config.breaker_reset_s)
+        # Embeddings get their own circuit (same rules): an embedding outage must not block chat, or vice versa.
+        self.embed_breaker = CircuitBreaker(self.config.breaker_threshold, self.config.breaker_reset_s)
         self._slots = threading.BoundedSemaphore(self.config.max_concurrency)
         self._lock = threading.Lock()
         self._turns = threading.local()   # each thread's last assistant turn, for repairs and follow-ups
@@ -411,20 +426,20 @@ class LLMClient:
         if self.config.budget_usd is not None and self.spent_usd >= self.config.budget_usd:
             raise BudgetExceededError(f"spent ${self.spent_usd:.6f} of ${self.config.budget_usd:.6f} budget")
 
-    def _create_with_retries(self, model: str, params: dict, request_id: str, call=None):
+    def _create_with_retries(self, model: str, params: dict, request_id: str, call=None, breaker=None):
         """Call one model with retries. Returns (response, attempts). `call` defaults to chat."""
-        call = call or self.client.chat
+        call, breaker = call or self.client.chat, breaker or self.breaker
         attempts = 0
         while True:
-            if not self.breaker.allow():
+            if not breaker.allow():
                 raise CircuitOpenError("provider is failing; circuit open, failing fast")
             attempts += 1
             try:
                 resp = call(model=model, **params)
-                self.breaker.record_success()
+                breaker.record_success()
                 return resp, attempts
             except RETRYABLE_ERRORS as exc:
-                self.breaker.record_failure()
+                breaker.record_failure()
                 exc.attempts = attempts
                 if attempts > self.config.max_retries or self._quota_gone(exc):
                     raise
@@ -528,7 +543,7 @@ class LLMClient:
     def embed(self, texts, model: Optional[str] = None, dimensions: Optional[int] = None) -> list:
         """One vector (a list of floats) per text, in order. Texts go in batched requests
         (embed_batch_size per request), each with the same protections as chat(): budget guard,
-        concurrency cap, circuit breaker, retries with backoff, daily-cap detection, timeout_s,
+        concurrency cap, a circuit breaker (its own), retries with backoff, daily-cap detection, timeout_s,
         and one log line per request (output_tokens is 0: embeddings have no output tokens).
         Vectors are returned exactly as the provider sent them: not every provider normalises."""
         texts = [texts] if isinstance(texts, str) else list(texts)
@@ -548,7 +563,8 @@ class LLMClient:
             params["dimensions"] = dimensions
         with self._slots:             # client-side concurrency limit
             try:
-                resp, attempts = self._create_with_retries(model, params, request_id, call=self.client.embeddings)
+                resp, attempts = self._create_with_retries(model, params, request_id, call=self.client.embeddings,
+                                                           breaker=self.embed_breaker)
                 data = sorted(resp.get("data") or [], key=lambda d: d.get("index", 0))
                 if len(data) != len(batch):
                     raise APIError(f"asked for {len(batch)} embeddings, got {len(data)}", body=resp)

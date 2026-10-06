@@ -13,7 +13,7 @@ All sessions are online, **2:00–4:00 PM IST**.
 | Day | Date | Theme | Lab |
 |-----|------|-------|-----|
 | [Day 1](day1.md) | Tue, Oct 6, 2026 | LLM foundations and reliable API calls | `day1_llm_calls.ipynb` |
-| [Day 2](day2.md) | Wed, Oct 7, 2026 | Embeddings, retrieval, and RAG | `day2_rag.ipynb` |
+| [Day 2](day2.md) | Wed, Oct 7, 2026 | From PDF to cited answers (RAG) | `notebooks/day2/Practice.ipynb` |
 | [Day 3](day3.md) | Thu, Oct 8, 2026 | Agents, tools, memory, and safety | `day3_agents.ipynb` |
 | [Day 4](day4.md) | Fri, Oct 9, 2026 | Shipping and operating | `day4_shipping.ipynb` |
 

@@ -146,7 +146,7 @@ def test_embeddings_float_and_base64(mock):
     texts = ["sliding window attention", "attention with a sliding window", "baking sourdough bread"]
     e = c.embeddings.create(model="mock-embed", input=texts)     # SDK default: base64, decoded by the SDK
     v = np.array([d.embedding for d in e.data])
-    assert v.shape == (3, 256) and np.allclose(np.linalg.norm(v, axis=1), 1, atol=1e-5)
+    assert v.shape == (3, 1024) and np.allclose(np.linalg.norm(v, axis=1), 1, atol=1e-5)
     assert v[0] @ v[1] > 0.5 > v[0] @ v[2]
     f = c.embeddings.create(model="mock-embed", input="sliding window attention", encoding_format="float",
                             dimensions=64)

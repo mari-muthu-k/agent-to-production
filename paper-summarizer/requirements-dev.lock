@@ -320,6 +320,8 @@ pygments==2.21.0
     #   ipython-pygments-lexers
     #   pytest
     #   rich
+pypdf==6.19.0
+    # via paper-agent (pyproject.toml)
 pypdfium2==5.13.0
     # via pdfplumber
 pypika==0.51.1

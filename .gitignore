@@ -226,3 +226,4 @@ site/
 .idea/
 .claude/settings.local.json
 reference
+archive

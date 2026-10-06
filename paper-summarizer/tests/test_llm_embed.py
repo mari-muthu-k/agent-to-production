@@ -11,6 +11,7 @@ from requests.structures import CaseInsensitiveDict
 from paper_agent.llm_client import (
     CALL_LOG,
     DAILY_CAP_MESSAGE,
+    BadRequestError,
     BudgetExceededError,
     CircuitOpenError,
     DailyQuotaError,
@@ -113,14 +114,15 @@ def test_embed_respects_the_budget_guard():
     assert fake.calls == 1
 
 
-def test_embed_shares_the_circuit_breaker_with_chat(no_sleep):
-    fake = FakeLLM([TransientError()] * 2)
+def test_embed_has_a_circuit_breaker_of_its_own(no_sleep):
+    fake = FakeLLM([TransientError()] * 2 + [fake_response("chat still works")])
     llm = LLMClient(LLMConfig(**FAST, max_retries=1, breaker_threshold=2), client=fake)
     with pytest.raises(TransientError):
-        llm.embed(["x"])                                       # 2 failures: circuit opens
+        llm.embed(["x"])                                       # 2 failures: the embedding circuit opens
     with pytest.raises(CircuitOpenError):
-        llm.chat([{"role": "user", "content": "hi"}])
-    assert fake.calls == 2
+        llm.embed(["x"])                                       # fails fast, no request
+    assert llm.chat([{"role": "user", "content": "hi"}]) == "chat still works"   # chat has its own circuit
+    assert fake.calls == 3
 
 
 def test_embed_concurrency_cap_holds():
@@ -216,10 +218,15 @@ def test_list_shaped_daily_429_is_a_daily_quota_error():
     assert DAILY_CAP_MESSAGE in e.message
 
 
-def test_per_minute_429_is_not_a_daily_cap():
-    body = [{"error": {"code": 429, "message": "slow down", "details": [{"retryDelay": "20s"}]}}]
+def test_per_minute_429_is_not_a_daily_cap_and_its_retry_delay_is_used(no_sleep):
+    body = [{"error": {"code": 429, "message": "slow down", "details": [
+        {"violations": [{"quotaId": "EmbedContentRequestsPerMinutePerUserPerProjectPerModel-FreeTier"}]},
+        {"retryDelay": "20s"}]}}]
     e = api_error(http_response(429, body), body)
-    assert type(e) is RateLimitError
+    assert type(e) is RateLimitError and e.retry_after == 20.0
+    fake = FakeLLM([e, fake_embedding_response([[1.0]])])
+    LLMClient(LLMConfig(**{**FAST, "max_delay_s": 30}), client=fake).embed(["x"])
+    assert no_sleep == [20.0]                                   # waited as long as the provider asked
 
 
 @pytest.mark.parametrize("call", ["chat", "embed"])
@@ -239,3 +246,20 @@ def test_header_detected_daily_cap_reads_plainly(no_sleep):
         429, {}, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset_in_hours}))
     with pytest.raises(DailyQuotaError, match="switch to LLM_FALLBACK_MODEL or another key"):
         LLMClient(LLMConfig(**FAST), client=FakeLLM([capped])).chat([{"role": "user", "content": "hi"}])
+
+
+def test_a_model_that_rejects_none_gets_low_once_and_it_is_remembered(monkeypatch):
+    """Gemini's lite models answer 400 to reasoning_effort "none"; "low" works for every Gemini model."""
+    monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    client = OpenRouterClient(api_key="k", base_url=GOOGLE)
+    sent = []
+
+    def post(path, body, headers=None, timeout=None):
+        sent.append(body["reasoning_effort"])
+        if body["reasoning_effort"] == "none":
+            raise BadRequestError("HTTP 400: Request contains an invalid argument.", status_code=400)
+        return {"ok": True}
+    monkeypatch.setattr(client, "post", post)
+    client.chat(model="gemini-3.5-flash-lite", messages=[])
+    client.chat(model="gemini-3.5-flash-lite", messages=[])
+    assert sent == ["none", "low", "low"]

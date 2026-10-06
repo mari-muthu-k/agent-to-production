@@ -5,13 +5,14 @@ Conventions it enforces (they match Day 1):
 - every section of a Practice notebook starts with a "⏩ N.0 CATCH-UP" cell that recreates everything
   earlier sections defined. It is assembled from the SAME strings as the teaching cells marked
   `carry=True` (solutions substituted for TODOs), so the two can never drift;
-- at most 3 TODOs, each followed by an offline test cell (tag `todo-test`) and a rescue cell whose
+- at most 4 TODOs, each followed by an offline test cell (tag `todo-test`) and a rescue cell whose
   code is the solution string;
 - TODO cells carry their solution in `metadata.solution` for tools/exec_notebooks.py.
 
 `src(obj)` returns the source of a package function, so teaching cells show exactly the code that
 the package (and its tests) run.
 """
+import ast
 import inspect
 import textwrap
 
@@ -23,11 +24,25 @@ COLAB_METADATA = {
     "kernelspec": {"display_name": "Python 3", "name": "python3"},
     "language_info": {"name": "python"},
 }
-MAX_TODOS = 3
+MAX_TODOS = 4
 
 
 def src(*objects) -> str:
     return "\n\n".join(textwrap.dedent(inspect.getsource(o)).strip() for o in objects)
+
+
+def consts(module, *names) -> str:
+    """Source of a module's top-level assignments to `names` (constants, regexes), in module order."""
+    source = inspect.getsource(module)
+    picked = [node for node in ast.parse(source).body
+              if isinstance(node, (ast.Assign, ast.AnnAssign))
+              and any(getattr(t, "id", None) in names for t in (node.targets if isinstance(node, ast.Assign)
+                                                               else [node.target]))]
+    missing = set(names) - {getattr(t, "id", None) for n in picked
+                            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])}
+    if missing:
+        raise KeyError(f"not assigned at top level of {module.__name__}: {sorted(missing)}")
+    return "\n".join(ast.get_source_segment(source, n) for n in picked)
 
 
 def clean(text: str) -> str:
@@ -58,10 +73,10 @@ class Notebook:
         return self
 
     # -- sections and catch-ups -------------------------------------------------------
-    def section(self, number: int, title: str, intro: str = "", catch_up: bool = True):
+    def section(self, number: int, title: str, intro: str = "", catch_up: bool = True, preamble: str = ""):
         self.md(f"---\n# Section {number}: {title}" + (f"\n\n{clean(intro)}" if intro else ""))
         if catch_up:
-            body = "\n\n".join([self.setup, *self.carried])
+            body = "\n\n".join([p for p in (clean(preamble), self.setup) if p] + self.carried)
             header = (f"# ⏩ {number}.0 CATCH-UP: run ONLY if you joined late or your runtime restarted.\n"
                       "# It recreates everything earlier sections defined, so you can follow along from here.")
             self.code(f"{header}\n{body}\nprint('✅ caught up: ready for Section {number}')", tags=("catch-up",))

@@ -135,7 +135,7 @@ def test_different_models_live_in_different_spaces():
 def test_openrouter_embedder_against_mock(mock):
     emb = OpenRouterEmbedder("mock-embed", client=mock.client(), batch_size=2)
     v = emb.embed(["a", "b", "c", "a"])
-    assert v.shape == (4, 256) and np.allclose(v[0], v[3])
+    assert v.shape == (4, 1024) and np.allclose(v[0], v[3])
     assert mock.stats()["embedding_requests"] == 2            # 3 unique texts, batches of 2
     assert emb.tokens_used > 0 and CALL_LOG[-1].model == "mock-embed"
     emb.embed(["a"])
@@ -145,7 +145,7 @@ def test_openrouter_embedder_against_mock(mock):
 def test_openrouter_embedder_retries_429(mock, no_sleep):
     mock.fault(status=429, retry_after=2, count=1, endpoint="embeddings")
     emb = OpenRouterEmbedder("mock-embed", client=mock.client())
-    assert emb.embed(["pass@1"]).shape == (1, 256) and no_sleep == [2.0]
+    assert emb.embed(["pass@1"]).shape == (1, 1024) and no_sleep == [2.0]
 
 
 def test_openrouter_embedder_does_not_retry_400(mock, no_sleep):
