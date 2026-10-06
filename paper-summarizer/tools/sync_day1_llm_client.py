@@ -28,6 +28,10 @@ TODO_2 = ('''        if truncated:
 
 
 def main() -> int:
+    if "--force" not in sys.argv:
+        print("Day 1 is frozen: the package llm_client.py now has Day 2 additions (embed(), ...).\n"
+              "Syncing would change the Day 1 notebook. Re-run with --force only if that is really intended.")
+        return 1
     solution = (ROOT / "paper_agent" / "llm_client.py").read_text()
     todo = solution
     for old, new in (TODO_1, TODO_2):

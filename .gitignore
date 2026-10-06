@@ -225,3 +225,4 @@ site/
 .vscode/
 .idea/
 .claude/settings.local.json
+reference

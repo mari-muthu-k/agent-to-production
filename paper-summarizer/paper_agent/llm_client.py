@@ -5,11 +5,13 @@ Every model call on Days 2, 3 and 4 goes through this module, so each
 protection here (timeouts, retries, circuit breaker, fallback, budget,
 validation, logging) protects the whole Paper Summarizer agent.
 
-It talks to OpenRouter's HTTP API directly with `requests` (no SDK).
-Settings are read from the environment on EVERY call, so you can switch
-models mid-session: LLM_MODEL may be one model or a comma-separated list
-("model-a:free,model-b:free"); the next one is used when one is rate-limited,
-out of credits or unavailable.
+It talks to any OpenAI-compatible HTTP API (OpenRouter, Gemini, ...) directly
+with `requests` (no SDK). Settings are read from the environment on EVERY call,
+so you can switch models mid-session: LLM_MODEL may be one model or a
+comma-separated list ("model-a,model-b"); the next one is used when one is
+rate-limited, out of credits or unavailable.
+
+Day 2 adds embed(): embedding calls get the same protections as chat().
 """
 import json
 import logging
@@ -70,6 +72,7 @@ class PaymentRequiredError(APIError): pass     # 402: out of credits (OpenRouter
 class PermissionDeniedError(APIError): pass    # 403: e.g. input flagged by moderation
 class NotFoundError(APIError): pass            # 404: unknown model or URL
 class RateLimitError(APIError): pass           # 429: too many requests
+class DailyQuotaError(RateLimitError): pass    # 429 that will not clear today: a free tier's daily cap
 class ServerError(APIError): pass              # 408, 5xx: timeout upstream, provider down, no provider
 class APITimeoutError(APIError): pass          # we gave up waiting
 class APIConnectionError(APIError): pass       # network failure
@@ -91,23 +94,67 @@ RETRYABLE_ERRORS = (
 #   PermissionDeniedError (403), NotFoundError (404)
 
 
+DAILY_CAP_MESSAGE = "daily free-tier limit reached: switch to LLM_FALLBACK_MODEL or another key"
+
+
+def _seconds(value) -> float:
+    """'31387s' or 31387 -> 31387.0; anything else -> 0."""
+    try:
+        return float(str(value).rstrip("s"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def is_daily_cap(err: dict) -> bool:
+    """A 429 body that names a per-day quota, or asks us to wait more than two minutes."""
+    for detail in err.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        if any("perday" in str(v.get("quotaId", "")).lower() for v in detail.get("violations") or []):
+            return True
+        if _seconds(detail.get("retryDelay")) > 120:
+            return True
+    return False
+
+
 def api_error(response, body) -> APIError:
-    """Turn an error response into the matching exception class."""
+    """Turn an error response into the matching exception class.
+    Some providers (Gemini) send the error object inside a JSON list: [{"error": {...}}]."""
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        body = body[0]
     err = body.get("error", {}) if isinstance(body, dict) else {}
-    status = response.status_code if response.status_code >= 400 else (err.get("code") or 500)
+    err = err if isinstance(err, dict) else {"message": str(err)}
+    code = err.get("code")
+    status = response.status_code if response.status_code >= 400 else (code if isinstance(code, int) else 500)
     message = err.get("message") or (response.text or "")[:300] or f"HTTP {status}"
     raw = (err.get("metadata") or {}).get("raw")
     if raw:
         message += f" (provider said: {str(raw)[:200]})"
+    if status == 429 and is_daily_cap(err):
+        return DailyQuotaError(f"HTTP 429: {DAILY_CAP_MESSAGE} (provider said: {message[:200]})",
+                               status_code=status, response=response, body=body)
     cls = STATUS_ERRORS.get(status, ServerError if status >= 500 else APIError)
     return cls(f"HTTP {status}: {message}", status_code=status, response=response, body=body)
+
+
+GEMINI_MODEL = re.compile(r"(^|/)(models/)?gemini", re.IGNORECASE)
+
+
+def reasoning_effort(model: Optional[str]) -> Optional[str]:
+    """The `reasoning_effort` to send: LLM_REASONING_EFFORT if set ("" or "default" = send nothing),
+    else "none" for Gemini models, whose thinking otherwise eats max_tokens and truncates answers."""
+    value = os.environ.get("LLM_REASONING_EFFORT")
+    if value is not None:
+        value = value.strip().lower()
+        return None if value in ("", "default") else value
+    return "none" if model and GEMINI_MODEL.search(model) else None
 
 
 # ---------------------------------------------------------------------------
 # The HTTP client: OpenRouter's REST API with requests
 # ---------------------------------------------------------------------------
 class OpenRouterClient:
-    """POSTs JSON to OpenRouter (or any OpenAI-compatible URL) and returns the JSON reply as a dict.
+    """POSTs JSON to any OpenAI-compatible URL (OpenRouter, Gemini, ...) and returns the JSON reply as a dict.
 
     The key and URL come from LLM_API_KEY / LLM_BASE_URL at call time unless given here.
     With GEMINI_API_KEY set, Google URLs use that key (and LLM_BASE_URL defaults to Gemini).
@@ -160,10 +207,19 @@ class OpenRouterClient:
     def is_google(self) -> bool:
         return "googleapis.com" in self.base_url
 
+    def is_openrouter(self) -> bool:
+        return "openrouter.ai" in self.base_url
+
     def chat(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
         """POST /chat/completions. `body` is the JSON request: model, messages, max_tokens, ..."""
         if self.is_google():
-            body.pop("reasoning", None)   # OpenRouter's switch; Gemini doesn't use it
+            body.pop("reasoning", None)   # OpenRouter's switch; Gemini uses reasoning_effort
+        effort = reasoning_effort(body.get("model"))
+        if effort and "reasoning_effort" not in body:
+            if self.is_openrouter():      # OpenRouter's own form of the same setting
+                body.setdefault("reasoning", {"enabled": False} if effort == "none" else {"effort": effort})
+            else:                         # the OpenAI-compatible parameter (Gemini, OpenAI, ...)
+                body["reasoning_effort"] = effort
         return self.post("chat/completions", body, headers, timeout)
 
     def embeddings(self, headers: Optional[dict] = None, timeout: Optional[float] = None, **body) -> dict:
@@ -193,6 +249,8 @@ class LLMConfig:
     max_concurrency: int = 4              # client-side limit on parallel calls
     breaker_threshold: int = 5            # consecutive failures before the circuit opens
     breaker_reset_s: float = 30.0         # how long the circuit stays open
+    embed_model: str = ""                 # "" = EMBED_MODEL, read at every call
+    embed_batch_size: int = 100           # inputs per /embeddings request (providers cap this)
     max_tokens_param: str = "max_tokens"  # some models want "max_completion_tokens"
     reasoning: Optional[dict] = None      # OpenRouter, e.g. {"enabled": False} or {"effort": "low"}; None = default
 
@@ -203,12 +261,14 @@ class CallRecord:
     model: str
     status: str               # ok | truncated | failed | fallback_ok
     attempts: int
-    input_tokens: int
-    output_tokens: int
+    input_tokens: Optional[int]     # None when the provider reported no usage (see usage_reported)
+    output_tokens: Optional[int]
     latency_ms: int
     cost_usd: float
     finish_reason: Optional[str]
     reasoning_tokens: int = 0   # "thinking" tokens: billed as output, and they count toward max_tokens
+    usage_reported: bool = True     # False: the provider sent no token counts, so cost is unknown, not 0
+    kind: str = "chat"              # chat | embed
 
 
 CALL_LOG: list = []   # every call lands here; Day 4 ships it to real tracing
@@ -311,7 +371,7 @@ class LLMClient:
     def _quota_gone(self, exc: Exception) -> bool:
         """Out of credits (402), or a 429 that will not clear soon (e.g. a free model's daily cap).
         Waiting is pointless: switch to the next model instead."""
-        if isinstance(exc, PaymentRequiredError):
+        if isinstance(exc, (PaymentRequiredError, DailyQuotaError)):
             return True
         if not isinstance(exc, RateLimitError):
             return False
@@ -334,19 +394,38 @@ class LLMClient:
         logger.info(json.dumps(asdict(rec)))   # one JSON line per call: easy to ship to Datadog/ELK
         return rec
 
-    def _create_with_retries(self, model: str, params: dict, request_id: str):
-        """Call one model with retries. Returns (response, attempts)."""
+    def _daily_cap(self, exc: Exception, model: str) -> Optional[DailyQuotaError]:
+        """A plain-language error for a 429 that will not clear today (detected from headers), else None."""
+        if isinstance(exc, (DailyQuotaError, PaymentRequiredError)) or not self._quota_gone(exc):
+            return None
+        return DailyQuotaError(f"{DAILY_CAP_MESSAGE} ({model}: {exc})", status_code=getattr(exc, "status_code", 429),
+                               response=getattr(exc, "response", None), body=getattr(exc, "body", None))
+
+    def _reraise(self, exc: Exception, model: str):
+        plain = self._daily_cap(exc, model)
+        if plain is None:
+            raise exc
+        raise plain from exc
+
+    def _check_budget(self) -> None:
+        if self.config.budget_usd is not None and self.spent_usd >= self.config.budget_usd:
+            raise BudgetExceededError(f"spent ${self.spent_usd:.6f} of ${self.config.budget_usd:.6f} budget")
+
+    def _create_with_retries(self, model: str, params: dict, request_id: str, call=None):
+        """Call one model with retries. Returns (response, attempts). `call` defaults to chat."""
+        call = call or self.client.chat
         attempts = 0
         while True:
             if not self.breaker.allow():
                 raise CircuitOpenError("provider is failing; circuit open, failing fast")
             attempts += 1
             try:
-                resp = self.client.chat(model=model, **params)
+                resp = call(model=model, **params)
                 self.breaker.record_success()
                 return resp, attempts
             except RETRYABLE_ERRORS as exc:
                 self.breaker.record_failure()
+                exc.attempts = attempts
                 if attempts > self.config.max_retries or self._quota_gone(exc):
                     raise
                 delay = max(self._backoff_delay(attempts - 1), self._retry_after(exc))
@@ -357,8 +436,7 @@ class LLMClient:
     # -- main API -----------------------------------------------------------
     def chat(self, messages: list, max_tokens: int = 500,
              temperature: Optional[float] = 0.0, **kwargs) -> str:
-        if self.config.budget_usd is not None and self.spent_usd >= self.config.budget_usd:
-            raise BudgetExceededError(f"spent ${self.spent_usd:.6f} of ${self.config.budget_usd:.6f} budget")
+        self._check_budget()
 
         request_id = uuid.uuid4().hex[:8]
         params = {"messages": messages, self.config.max_tokens_param: max_tokens, **kwargs}
@@ -381,7 +459,7 @@ class LLMClient:
                     self._record(request_id=request_id, model=model_used, status="failed", attempts=0,
                                  input_tokens=0, output_tokens=0, finish_reason=None, cost_usd=0.0,
                                  latency_ms=int((time.perf_counter() - start) * 1000))
-                    raise
+                    self._reraise(exc, primary)
                 resp = None
                 for model_used in others:          # each fallback model gets one attempt
                     logger.warning(f"[{request_id}] {type(exc).__name__} on {primary}; trying {model_used}")
@@ -393,28 +471,33 @@ class LLMClient:
                             self.exhausted.add(model_used)
                         exc = fallback_exc
                 if resp is None:
-                    raise exc
+                    self._record(request_id=request_id, model=model_used, status="failed", attempts=0,
+                                 input_tokens=0, output_tokens=0, finish_reason=None, cost_usd=0.0,
+                                 latency_ms=int((time.perf_counter() - start) * 1000))
+                    self._reraise(exc, model_used)
                 status, attempts = "fallback_ok", 1
 
         choice, usage = resp["choices"][0], resp.get("usage") or {}
         message = choice.get("message") or {}
-        in_tok = usage.get("prompt_tokens") or 0
-        out_tok = usage.get("completion_tokens") or 0
+        reported = usage.get("prompt_tokens") is not None
+        in_tok = usage.get("prompt_tokens") if reported else None
+        out_tok = (usage.get("completion_tokens") or 0) if reported else None
         reasoning_tok = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
         truncated = choice.get("finish_reason") == "length"
         self._record(request_id=request_id, model=model_used,
                      status="truncated" if truncated else status, attempts=attempts,
                      input_tokens=in_tok, output_tokens=out_tok,
                      latency_ms=int((time.perf_counter() - start) * 1000),
-                     cost_usd=round(self._cost(in_tok, out_tok), 6), finish_reason=choice.get("finish_reason"),
-                     reasoning_tokens=reasoning_tok)
+                     cost_usd=round(self._cost(in_tok or 0, out_tok or 0), 6),
+                     finish_reason=choice.get("finish_reason"),
+                     reasoning_tokens=reasoning_tok, usage_reported=reported)
 
         # Keep the assistant turn for follow-ups. OpenRouter: pass reasoning_details back unmodified.
         turn = {"role": "assistant", "content": message.get("content")}
         if message.get("reasoning_details"):
             turn["reasoning_details"] = message["reasoning_details"]
         self._turns.message = turn
-        hint = ("; the model's reasoning used the whole budget: raise max_tokens or set reasoning={'enabled': False}"
+        hint = ("; the model's reasoning used the whole budget: raise max_tokens or set LLM_REASONING_EFFORT=none"
                 if reasoning_tok and not message.get("content") else "")
 
         # Never hand half an answer to the rest of the system.
@@ -441,6 +524,51 @@ class LLMClient:
                 raise StructuredOutputError(str(second_error)) from second_error
 
 
+    # -- embeddings (Day 2) -------------------------------------------------
+    def embed(self, texts, model: Optional[str] = None, dimensions: Optional[int] = None) -> list:
+        """One vector (a list of floats) per text, in order. Texts go in batched requests
+        (embed_batch_size per request), each with the same protections as chat(): budget guard,
+        concurrency cap, circuit breaker, retries with backoff, daily-cap detection, timeout_s,
+        and one log line per request (output_tokens is 0: embeddings have no output tokens).
+        Vectors are returned exactly as the provider sent them: not every provider normalises."""
+        texts = [texts] if isinstance(texts, str) else list(texts)
+        model = model or self.config.embed_model or os.environ.get("EMBED_MODEL", "").strip()
+        if not model:
+            raise ValueError("no embedding model configured: set EMBED_MODEL")
+        vectors = []
+        for i in range(0, len(texts), self.config.embed_batch_size):
+            vectors += self._embed_batch(model, texts[i:i + self.config.embed_batch_size], dimensions)
+        return vectors
+
+    def _embed_batch(self, model: str, batch: list, dimensions: Optional[int]) -> list:
+        self._check_budget()
+        request_id, start = uuid.uuid4().hex[:8], time.perf_counter()
+        params = {"input": batch, "timeout": self.config.timeout_s}
+        if dimensions:
+            params["dimensions"] = dimensions
+        with self._slots:             # client-side concurrency limit
+            try:
+                resp, attempts = self._create_with_retries(model, params, request_id, call=self.client.embeddings)
+                data = sorted(resp.get("data") or [], key=lambda d: d.get("index", 0))
+                if len(data) != len(batch):
+                    raise APIError(f"asked for {len(batch)} embeddings, got {len(data)}", body=resp)
+            except Exception as exc:
+                self._record(request_id=request_id, model=model, status="failed",
+                             attempts=getattr(exc, "attempts", 1), input_tokens=0, output_tokens=0,
+                             latency_ms=int((time.perf_counter() - start) * 1000), cost_usd=0.0,
+                             finish_reason=None, kind="embed")
+                self._reraise(exc, model)
+        usage = resp.get("usage") or {}
+        reported = usage.get("prompt_tokens") is not None
+        in_tok = usage.get("prompt_tokens") if reported else None
+        self._record(request_id=request_id, model=model, status="ok", attempts=attempts,
+                     input_tokens=in_tok, output_tokens=0,
+                     latency_ms=int((time.perf_counter() - start) * 1000),
+                     cost_usd=round(self._cost(in_tok or 0, 0), 6), finish_reason=None,
+                     usage_reported=reported, kind="embed")
+        return [d["embedding"] for d in data]
+
+
 def summarize_calls(log: Optional[list] = None) -> dict:
     """Totals across recorded calls: the seed of cost and latency monitoring."""
     log = CALL_LOG if log is None else log
@@ -452,8 +580,9 @@ def summarize_calls(log: Optional[list] = None) -> dict:
         "by_status": {s: sum(r.status == s for r in log) for s in sorted({r.status for r in log})},
         "by_model": {m: sum(r.model == m for r in log) for m in sorted({r.model for r in log})},
         "retries": sum(max(r.attempts - 1, 0) for r in log),
-        "input_tokens": sum(r.input_tokens for r in log),
-        "output_tokens": sum(r.output_tokens for r in log),
+        "input_tokens": sum(r.input_tokens or 0 for r in log),
+        "output_tokens": sum(r.output_tokens or 0 for r in log),
+        "usage_unreported": sum(not r.usage_reported for r in log),
         "total_cost_usd": round(sum(r.cost_usd for r in log), 6),
         "p50_latency_ms": lat[len(lat) // 2],
         "max_latency_ms": lat[-1],

@@ -22,12 +22,14 @@ from typing import Optional
 import requests
 
 from paper_agent.llm_client import (  # noqa: F401  (re-exported: one import for notebooks)
+    DAILY_CAP_MESSAGE,
     OPENROUTER_URL,
     APIConnectionError,
     APIError,
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    DailyQuotaError,
     NotFoundError,
     OpenRouterClient,
     PaymentRequiredError,
@@ -143,11 +145,13 @@ def reasoning_tokens(usage: Optional[dict]) -> int:
 
 
 def rate_limit_message(exc: Exception) -> str:
-    """A human sentence for a 429, using OpenRouter's X-RateLimit-* headers when present."""
+    """A human sentence for a 429, provider-neutral; uses X-RateLimit-* headers when present."""
+    if isinstance(exc, DailyQuotaError):
+        return f"{DAILY_CAP_MESSAGE} (use_model(...) switches the chat model without a restart)"
     headers = getattr(getattr(exc, "response", None), "headers", None) or {}
     limit, remaining = headers.get("x-ratelimit-limit"), headers.get("x-ratelimit-remaining")
     msg = "rate limited (HTTP 429)"
     if limit is not None:
         msg += f": limit {limit}, remaining {remaining}"
-    return msg + (". Free models: 20 requests/minute and 50/day without credits (1000/day with $10+). "
-                  "Try another model with use_model(...), or wait.")
+    return msg + (". Free tiers limit requests per minute and per day. llm_client already retried; "
+                  "wait 30 seconds, or try another model with use_model(...).")

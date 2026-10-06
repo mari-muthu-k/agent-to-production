@@ -32,9 +32,26 @@ def last_cell_matching(pattern: str) -> str:
     return [c for c in CODEALONG if re.search(pattern, c)][-1]
 
 
-def test_llm_client_matches_the_solution_cell():
+def test_llm_client_is_a_superset_of_the_day1_solution_cell():
+    """Day 1's notebook writes its own llm_client.py from this cell, and is never edited again.
+    Day 2 extends the package file (embed(), Gemini reasoning, daily-cap errors), so the package must
+    keep every class, function and method the Day 1 cell defines, with compatible signatures."""
+    import ast
+    import inspect
     solution = last_cell_matching(r"^%%writefile llm_client.py\n# (🆘 )?SOLUTION VERSION").split("\n", 2)[2]
-    assert Path(llm_client.__file__).read_text().rstrip("\n") == solution.rstrip("\n")
+    for node in ast.parse(solution).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            assert hasattr(llm_client, node.name), f"Day 1 defines {node.name}; the package dropped it"
+        if isinstance(node, ast.ClassDef):
+            cls = getattr(llm_client, node.name)
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    assert hasattr(cls, item.name), f"Day 1 defines {node.name}.{item.name}"
+                    if isinstance(inspect.getattr_static(cls, item.name), property):
+                        continue
+                    day1_params = [a.arg for a in item.args.args]
+                    now = list(inspect.signature(getattr(cls, item.name)).parameters)
+                    assert now[:len(day1_params)] == day1_params, f"{node.name}.{item.name} signature changed"
 
 
 def test_explainer_prompt_matches_the_catch_up_cell():

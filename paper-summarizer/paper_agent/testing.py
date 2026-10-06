@@ -9,16 +9,27 @@ def fake_response(content, finish_reason="stop", **message_fields):
             "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
 
 
+def fake_embedding_response(vectors, usage=True):
+    """An /embeddings reply. usage=False: the provider sent no token counts (Gemini does this)."""
+    reply = {"data": [{"index": i, "embedding": list(v)} for i, v in enumerate(vectors)]}
+    if usage:
+        reply["usage"] = {"prompt_tokens": 10 * len(vectors), "total_tokens": 10 * len(vectors)}
+    return reply
+
+
 class FakeLLM:
-    """Pretends to be the HTTP client; returns or raises scripted items in order. No network."""
+    """Pretends to be the HTTP client; returns or raises scripted items in order. No network.
+    The same script serves chat() and embeddings(); `bodies` keeps every request body."""
     def __init__(self, script):
-        self.script, self.calls = list(script), 0
+        self.script, self.calls, self.bodies = list(script), 0, []
     def chat(self, **body):
         self.calls += 1
+        self.bodies.append(body)
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
         return item
+    embeddings = chat
 
 
 class FlakyProvider:
