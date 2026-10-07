@@ -562,6 +562,7 @@ def short_reply(req: Request) -> str:
 
 INTENTS = [
     (r"Reply with exactly:\s*(.+)", lambda r, m: m.group(1).strip().rstrip(".").strip("'\"")),
+    (r"Reply with one word:\s*(\w+)", lambda r, m: m.group(1)),
     (r"How many (?:letter )?(\w)'?s? are in (?:the word )?'([^']+)'", _count_letters),
     (r"^\s*Are you sure\?", lambda r, m: _are_you_sure(r)),
     (r"\bWho am I\b", lambda r, m: _who_am_i(r)),

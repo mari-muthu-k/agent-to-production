@@ -23,12 +23,18 @@ rag = [                          # Day 2
     "langchain-text-splitters>=0.3",
     "chromadb>=1.0",
 ]
+agent = [                        # Day 3 (also in the runtime image: the Day 4 api service runs the agent)
+    "langchain>=1.4.3,<1.5",     # create_agent, middleware (ToolErrorMiddleware needs a recent 1.x)
+    "langchain-core>=1.6.7,<1.7",
+    "langgraph>=1.2.14,<1.3",
+    "langchain-openai>=1.6.7,<1.7",
+]
 mock = [                         # mock-llm server (and the Day 4 api service)
     "fastapi",
     "uvicorn",
 ]
 dev = [
-    "paper-agent[rag,mock]",
+    "paper-agent[rag,mock,agent]",
     "pytest",
     "ruff",
     "openai",       # tests only: proves mock-llm stays OpenAI-compatible (the LiteLLM gateway relies on it)
@@ -68,6 +74,7 @@ ignore = [
 "paper_agent/fixtures/tinycoder.py" = ["E501"]
 "paper_agent/explain.py" = ["E501"]
 "paper_agent/rag/pdf_rag.py" = ["E501"]   # the TODO answer-key lines stay one line: they are typed live
+"paper_agent/agent/prompts.py" = ["E501"]   # the system prompt: one rule per line, as the model reads it
 # Notebook text (markdown tables, cell code) is laid out for the rendered notebook, not for 120 columns.
 "notebook_templates/*" = ["E501"]
 "tools/sync_day1_llm_client.py" = ["E501"]   # holds verbatim lines of llm_client.py

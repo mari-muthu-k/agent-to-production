@@ -96,3 +96,39 @@ def no_sleep(monkeypatch):
     slept = []
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: slept.append(s))
     return slept
+
+
+# --- Day 3 ---------------------------------------------------------------------------------------
+PDFS = ROOT / "paper_agent" / "fixtures" / "pdfs"
+PAPER_FILES = {"tinycoder": "tinycoder_day3.pdf", "tinycoder-injected": "tinycoder_injected.pdf",
+               "quickembed": "second_paper.pdf"}
+
+
+@pytest.fixture(scope="session")
+def day3(mock_url, tmp_path_factory):
+    """pdf_rag's notebook globals set for mock-llm, a Chroma index in a temporary folder, three papers loaded."""
+    from paper_agent.llm_client import LLMClient, LLMConfig
+    from paper_agent.rag import pdf_rag as day2
+
+    env = {"LLM_BASE_URL": f"{mock_url}/v1", "LLM_API_KEY": "sk-mock-local", "LLM_MODEL": "mock-llm",
+           "EMBED_MODEL": "mock-embed"}
+    saved_env = {k: os.environ.get(k) for k in env}
+    names = ("llm", "EMBED_MODEL", "collection", "USE_PRECOMPUTED", "PRECOMPUTED")
+    saved_globals = {k: getattr(day2, k) for k in names}
+    folder, cwd = tmp_path_factory.mktemp("day3"), os.getcwd()
+    os.environ.update(env)
+    os.chdir(folder)
+    day2.llm, day2.EMBED_MODEL, day2.USE_PRECOMPUTED, day2.PRECOMPUTED = LLMClient(LLMConfig()), "mock-embed", False, {}
+    day2.collection = day2.open_index("index")
+    from paper_agent.agent.papers import load_paper
+    for paper_id, name in PAPER_FILES.items():
+        load_paper(PDFS / name, paper_id)
+    yield day2
+    os.chdir(cwd)
+    for k, v in saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    for k, v in saved_globals.items():
+        setattr(day2, k, v)

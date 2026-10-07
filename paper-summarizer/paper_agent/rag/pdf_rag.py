@@ -155,6 +155,33 @@ def clean_pages(pages: list) -> list:
     return cleaned
 
 
+HIDDEN_MIN_POINTS = 3.0                       # smaller than this is unreadable on a printed page
+
+
+def hidden_text(path, min_points: float = HIDDEN_MIN_POINTS) -> list:
+    """Lines a reader can't see but the parser extracts: white text, or text under `min_points` points.
+    pypdf gives text only, so this reads character colours and sizes with pdfplumber (Day 3, 5.5).
+    Returns [{"page": 5, "reason": "white text", "text": "..."}], one entry per visual line."""
+    import pdfplumber
+
+    def white(colour) -> bool:
+        c = tuple(colour or ())
+        if len(c) == 4:                                    # CMYK: no ink at all is white
+            return all(v <= 0.05 for v in c)
+        return bool(c) and all(isinstance(v, (int, float)) and v >= 0.95 for v in c)
+
+    found = []
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, start=1):
+            for reason, test in (("white text", lambda ch: white(ch.get("non_stroking_color"))),
+                                 ("tiny font", lambda ch: ch.get("size", 99) < min_points)):
+                part = page.filter(lambda obj, test=test: obj.get("object_type") != "char" or test(obj))
+                for line in (part.extract_text() or "").splitlines():
+                    if len(line.strip()) >= 10:
+                        found.append({"page": number, "reason": reason, "text": " ".join(line.split())})
+    return found
+
+
 # =================================================================================================
 # 5. Chunk
 # =================================================================================================

@@ -1,0 +1,11 @@
+# Day 3 in Colab: cell 3.0 runs `pip install -r requirements-day3.txt` when any of these is missing or different.
+# Direct dependencies only, pinned to the versions in requirements.lock / requirements-dev.lock (Docker), so the
+# notebook runs against exactly what `make exec-notebooks` executed. tests/test_day3_setup.py checks they agree.
+langchain==1.4.3
+langchain-core==1.6.7
+langgraph==1.2.14
+langchain-openai==1.6.7
+pypdf==6.19.0
+pdfplumber==0.11.10
+chromadb==1.5.9
+langchain-text-splitters==1.1.3

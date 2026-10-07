@@ -45,6 +45,25 @@ def consts(module, *names) -> str:
     return "\n".join(ast.get_source_segment(source, n) for n in picked)
 
 
+def defs(module, *names) -> str:
+    """Source of a module's top-level functions/classes `names`, decorators included, in the order given.
+    For objects src() can't reach: @tool functions become StructuredTools and @wrap_tool_call/@after_agent
+    functions become middleware instances."""
+    source = inspect.getsource(module)
+    lines = source.splitlines()
+    found = {node.name: node for node in ast.parse(source).body
+             if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+    missing = [n for n in names if n not in found]
+    if missing:
+        raise KeyError(f"not defined at top level of {module.__name__}: {missing}")
+    out = []
+    for name in names:
+        node = found[name]
+        start = min([d.lineno for d in node.decorator_list] + [node.lineno])
+        out.append("\n".join(lines[start - 1:node.end_lineno]))
+    return "\n\n\n".join(out)
+
+
 def clean(text: str) -> str:
     return textwrap.dedent(text).strip("\n")
 
@@ -56,6 +75,15 @@ class Notebook:
         self.cells: list = []
         self.carried: list = []         # source strings recreated by later catch-up cells
         self.todos = 0
+        self.anchors: dict = {}         # name -> index of the cell that follows anchor(name)
+
+    def anchor(self, name: str):
+        """Remember the next cell, so markdown can link to it with link(name) (Colab: #scrollTo=<cell id>)."""
+        self.anchors[name] = len(self.cells)
+        return self
+
+    def link(self, name: str) -> str:
+        return f"[{name}](#scrollTo={self.name}-{self.anchors[name]:03d})"
 
     # -- plain cells -----------------------------------------------------------------
     def md(self, text: str):

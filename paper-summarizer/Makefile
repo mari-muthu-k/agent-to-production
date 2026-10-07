@@ -33,8 +33,9 @@ mock: env  ## Start only mock-llm on http://localhost:8100
 gateway: env  ## Start the LiteLLM gateway (rehearsal profile) on http://localhost:4000
 	$(COMPOSE) --profile gateway up -d --wait gateway
 
-notebooks: env  ## Regenerate the Day 2+ notebooks from templates (Day 1 is edited by hand, never touched)
-	$(RUN) --no-deps tests python tools/build_notebooks.py
+DAYS ?= 3
+notebooks: env  ## Regenerate notebooks from templates: make notebooks DAYS=3 (Day 1 is edited by hand, never touched)
+	$(RUN) --no-deps tests python tools/build_notebooks.py $(DAYS)
 
 sync-day1: env  ## Copy paper_agent/llm_client.py into the Day 1 Practice notebook's llm_client cells
 	$(RUN) --no-deps tests python tools/sync_day1_llm_client.py
@@ -47,7 +48,7 @@ check-gateway: env  ## Probe the endpoint in .env (LLM_BASE_URL) for supported f
 
 lock:  ## Re-resolve requirements.lock / requirements-dev.lock (needs network)
 	docker run --rm -v "$(CURDIR)":/w -w /w ghcr.io/astral-sh/uv:python3.11-trixie-slim sh -c '\
-	  uv pip compile pyproject.toml --extra mock --python-version 3.11 --universal -q -o requirements.lock && \
+	  uv pip compile pyproject.toml --extra mock --extra agent --python-version 3.11 --universal -q -o requirements.lock && \
 	  uv pip compile pyproject.toml --extra dev -c requirements.lock --python-version 3.11 --universal -q -o requirements-dev.lock'
 
 logs:  ## Follow service logs

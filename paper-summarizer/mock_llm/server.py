@@ -5,6 +5,10 @@
     GET  /v1/models             known model names
     GET  /health
     /mock/faults, /mock/stats, /mock/reset   control endpoints (see mock_llm/faults.py)
+    /mock/mode                               Day 3 agent mode: injection obey|resist, force_citation (mock_llm/agent.py)
+
+Usage reports prompt_tokens_details.cached_tokens when a request repeats a long prefix of the previous
+one (>= 1,024 tokens, in blocks of 128), like providers with automatic prompt caching (Day 3, 6.5).
 
 Lenient by default, so switching LLM_BASE_URL is the only change between offline and online:
 any API key and model name work, except deliberately bad ones (patterns below) used in error demos.
@@ -21,7 +25,7 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from mock_llm import embeddings, responders, text
+from mock_llm import agent, embeddings, responders, text
 from mock_llm.faults import Fault, FaultQueue, fault_from_headers, merge
 
 REJECT_KEYS = re.compile(os.environ.get("MOCK_REJECT_KEYS", r"wrong|invalid|revoked|expired"), re.I)
@@ -38,6 +42,9 @@ CONTEXT_TOKENS = int(os.environ.get("MOCK_CONTEXT_TOKENS", "16384"))   # like a 
 app = FastAPI(title="mock-llm", version="1.0")
 FAULTS = FaultQueue()
 STATS: Counter = Counter()
+MODE = agent.Mode()
+PREFIX_MIN_TOKENS, PREFIX_BLOCK = 1024, 128
+_LAST_PROMPT = {"text": ""}
 
 _ERROR_TYPES = {400: ("invalid_request_error", None), 401: ("invalid_request_error", "invalid_api_key"),
                 403: ("permission_error", None), 404: ("invalid_request_error", "model_not_found"),
@@ -87,6 +94,26 @@ async def read_json(request: Request):
 def prompt_tokens(messages: list, tools: Optional[list]) -> int:
     n = 3 + sum(4 + text.count(responders.text_of(m)) for m in messages)
     return n + (text.count(json.dumps(tools)) if tools else 0)
+
+
+def cached_prefix_tokens(messages: list, tools: Optional[list]) -> int:
+    """Tokens of the longest prefix shared with the previous request, if long enough to be cached."""
+    prompt = json.dumps(tools or []) + "".join(f"<{m.get('role')}>{responders.text_of(m)}" for m in messages)
+    previous, _LAST_PROMPT["text"] = _LAST_PROMPT["text"], prompt
+    n = 0
+    for a, b in zip(prompt, previous, strict=False):
+        if a != b:
+            break
+        n += 1
+    shared = text.count(prompt[:n])
+    return 0 if shared < PREFIX_MIN_TOKENS else shared // PREFIX_BLOCK * PREFIX_BLOCK
+
+
+def mode_for(headers) -> "agent.Mode":
+    """The /mock/mode settings, overridden per request by X-Mock-Injection / X-Mock-Force-Citation."""
+    injection = (headers.get("x-mock-injection") or MODE.injection).strip().lower()
+    return agent.Mode(injection=injection if injection in ("obey", "resist") else MODE.injection,
+                      force_citation=headers.get("x-mock-force-citation") or MODE.force_citation)
 
 
 def validate_chat(body: dict, fault: Fault):
@@ -177,7 +204,10 @@ async def chat_completions(request: Request):
         response_format=body.get("response_format"), tools=body.get("tools"), tool_choice=body.get("tool_choice"))
     thinking, hide_thinking = reasoning_requested(body)
     req.reasoning = thinking
-    reply = responders.respond(req, fault)
+    if agent.is_agent_request(req):
+        reply = agent.respond(req, fault, mode_for(request.headers))
+    else:
+        reply = responders.respond(req, fault)
     max_tokens = min(body.get("max_tokens") or DEFAULT_MAX_TOKENS,
                      body.get("max_completion_tokens") or DEFAULT_MAX_TOKENS)
 
@@ -206,6 +236,8 @@ async def chat_completions(request: Request):
     out_tokens += reasoning_tokens
     usage = {"prompt_tokens": n_prompt, "completion_tokens": out_tokens}
     usage["total_tokens"] = usage["prompt_tokens"] + out_tokens
+    usage["prompt_tokens_details"] = {"cached_tokens": min(cached_prefix_tokens(body["messages"], body.get("tools")),
+                                                           n_prompt)}
     if thinking:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
     STATS["status_200"] += 1
@@ -323,8 +355,26 @@ async def stats():
     return dict(STATS)
 
 
+@app.get("/mock/mode")
+async def get_mode():
+    return MODE.__dict__
+
+
+@app.post("/mock/mode")
+async def set_mode(update: dict):
+    """{"injection": "obey" | "resist", "force_citation": "c99" | null}; omitted keys stay as they are."""
+    if update.get("injection", MODE.injection) not in ("obey", "resist"):
+        return error(400, "injection must be 'obey' or 'resist'", param="injection")
+    for key in ("injection", "force_citation"):
+        if key in update:
+            setattr(MODE, key, update[key])
+    return MODE.__dict__
+
+
 @app.post("/mock/reset")
 async def reset():
     FAULTS.clear()
     STATS.clear()
+    MODE.injection, MODE.force_citation = "obey", None
+    _LAST_PROMPT["text"] = ""
     return {"ok": True}

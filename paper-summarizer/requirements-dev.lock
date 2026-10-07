@@ -43,6 +43,7 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   kubernetes
+    #   langchain-openai
     #   requests
 cffi==2.1.1 ; implementation_name == 'pypy' or platform_python_implementation != 'PyPy'
     # via
@@ -75,7 +76,9 @@ cryptography==50.0.2
 debugpy==1.8.22
     # via ipykernel
 distro==1.9.0
-    # via langsmith
+    # via
+    #   -c requirements.lock
+    #   langsmith
 durationpy==0.11
     # via kubernetes
 executing==2.2.1
@@ -111,22 +114,31 @@ h11==0.16.0
 hf-xet==1.6.0 ; platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
     # via huggingface-hub
 httpcore==1.0.9
-    # via httpx
+    # via
+    #   -c requirements.lock
+    #   httpx
 httpcore2==2.13.1 ; sys_platform != 'emscripten'
-    # via httpx2
+    # via
+    #   -c requirements.lock
+    #   httpx2
 httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
     # via
+    #   -c requirements.lock
     #   chromadb
     #   huggingface-hub
     #   langchain-core
+    #   langgraph-sdk
 httpx2==2.13.1
     # via
+    #   -c requirements.lock
     #   langsmith
     #   openai
 httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
-    # via httpx2
+    # via
+    #   -c requirements.lock
+    #   httpx2
 huggingface-hub==1.33.0
     # via tokenizers
 idna==3.20
@@ -150,11 +162,17 @@ ipython-pygments-lexers==1.1.1
 jedi==0.20.0
     # via ipython
 jiter==0.17.0
-    # via openai
+    # via
+    #   -c requirements.lock
+    #   openai
 jsonpatch==1.33
-    # via langchain-core
-jsonpointer==3.1.1
-    # via jsonpatch
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+jsonpointer==3.2.0
+    # via
+    #   -c requirements.lock
+    #   jsonpatch
 jsonschema==4.26.0
     # via
     #   chromadb
@@ -173,14 +191,54 @@ jupyter-core==5.9.1
     #   nbformat
 kubernetes==36.0.3
     # via chromadb
-langchain-core==1.6.6
-    # via langchain-text-splitters
+langchain==1.4.3
+    # via
+    #   -c requirements.lock
+    #   paper-agent (pyproject.toml)
+langchain-core==1.6.7
+    # via
+    #   -c requirements.lock
+    #   paper-agent (pyproject.toml)
+    #   langchain
+    #   langchain-openai
+    #   langchain-text-splitters
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-sdk
+langchain-openai==1.6.7
+    # via
+    #   -c requirements.lock
+    #   paper-agent (pyproject.toml)
 langchain-protocol==0.0.19
-    # via langchain-core
+    # via
+    #   -c requirements.lock
+    #   langchain-core
+    #   langgraph-sdk
 langchain-text-splitters==1.1.3
     # via paper-agent (pyproject.toml)
+langgraph==1.2.14
+    # via
+    #   -c requirements.lock
+    #   paper-agent (pyproject.toml)
+    #   langchain
+langgraph-checkpoint==4.2.0
+    # via
+    #   -c requirements.lock
+    #   langgraph
+    #   langgraph-prebuilt
+langgraph-prebuilt==1.1.0
+    # via
+    #   -c requirements.lock
+    #   langgraph
+langgraph-sdk==0.4.6
+    # via
+    #   -c requirements.lock
+    #   langgraph
 langsmith==0.14.4
-    # via langchain-core
+    # via
+    #   -c requirements.lock
+    #   langchain-core
 markdown-it-py==4.2.0
     # via rich
 matplotlib-inline==0.2.2
@@ -219,8 +277,11 @@ oauthlib==4.0.0
     # via requests-oauthlib
 onnxruntime==1.30.0
     # via chromadb
-openai==3.24.0
-    # via paper-agent (pyproject.toml)
+openai==3.26.0
+    # via
+    #   -c requirements.lock
+    #   paper-agent (pyproject.toml)
+    #   langchain-openai
 opentelemetry-api==1.45.0
     # via
     #   -c requirements.lock
@@ -246,14 +307,21 @@ opentelemetry-sdk==1.45.0
     #   opentelemetry-exporter-otlp-proto-grpc
 opentelemetry-semantic-conventions==0.66b0
     # via opentelemetry-sdk
-orjson==3.12.0
+orjson==3.13.0
     # via
+    #   -c requirements.lock
     #   chromadb
+    #   langgraph-sdk
     #   langsmith
+ormsgpack==1.12.2
+    # via
+    #   -c requirements.lock
+    #   langgraph-checkpoint
 overrides==7.7.0
     # via chromadb
 packaging==26.3
     # via
+    #   -c requirements.lock
     #   build
     #   huggingface-hub
     #   ipykernel
@@ -304,7 +372,9 @@ pydantic==2.13.5
     #   paper-agent (pyproject.toml)
     #   chromadb
     #   fastapi
+    #   langchain
     #   langchain-core
+    #   langgraph
     #   langsmith
     #   openai
     #   pydantic-settings
@@ -340,6 +410,7 @@ python-dotenv==1.2.4
     #   uvicorn
 pyyaml==6.0.3
     # via
+    #   -c requirements.lock
     #   chromadb
     #   huggingface-hub
     #   kubernetes
@@ -371,7 +442,9 @@ requests==2.34.2
 requests-oauthlib==2.0.0
     # via kubernetes
 requests-toolbelt==1.0.0
-    # via langsmith
+    # via
+    #   -c requirements.lock
+    #   langsmith
 rich==15.0.0
     # via
     #   chromadb
@@ -390,6 +463,7 @@ six==1.17.0
     #   python-dateutil
 sniffio==1.3.1
     # via
+    #   -c requirements.lock
     #   langsmith
     #   openai
 stack-data==0.6.3
@@ -398,14 +472,16 @@ starlette==1.7.0
     # via
     #   -c requirements.lock
     #   fastapi
-tenacity==9.1.4
+tenacity==9.2.1
     # via
+    #   -c requirements.lock
     #   chromadb
     #   langchain-core
 tiktoken==0.14.0
     # via
     #   -c requirements.lock
     #   paper-agent (pyproject.toml)
+    #   langchain-openai
 tokenizers==0.23.2
     # via chromadb
 tornado==6.5.10
@@ -427,6 +503,7 @@ traitlets==5.16.1
     #   nbformat
 truststore==0.10.4 ; sys_platform != 'emscripten'
     # via
+    #   -c requirements.lock
     #   httpcore2
     #   httpx2
 typer==0.27.2
@@ -470,6 +547,7 @@ urllib3==2.8.0
     #   requests
 uuid-utils==0.17.1
     # via
+    #   -c requirements.lock
     #   langchain-core
     #   langsmith
 uvicorn==0.54.0
@@ -485,13 +563,20 @@ wcwidth==0.9.1
     # via prompt-toolkit
 websocket-client==1.9.2
     # via kubernetes
-websockets==17.2
+websockets==16.1.1
     # via
+    #   -c requirements.lock
+    #   langgraph-sdk
     #   langsmith
     #   uvicorn
 xxhash==4.0.1
-    # via langsmith
+    # via
+    #   -c requirements.lock
+    #   langgraph
+    #   langsmith
 yarl==1.25.1
     # via aiohttp
 zstandard==0.25.0
-    # via langsmith
+    # via
+    #   -c requirements.lock
+    #   langsmith

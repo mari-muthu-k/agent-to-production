@@ -46,7 +46,7 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 | `make lint` | `ruff check` |
 | `make mock` | Start only the mock on `http://localhost:8100` |
 | `make gateway` | Start the LiteLLM proxy on `http://localhost:4000` (rehearsal profile) |
-| `make notebooks` | Regenerate Day 2+ notebooks from `notebook_templates/` (Day 1 is never touched) |
+| `make notebooks DAYS=3` | Regenerate the named days' notebooks from `notebook_templates/` (Day 1 is never touched) |
 | `make exec-notebooks` | Execute every notebook against `mock-llm`; fail on any unexpected error |
 | `make check-gateway` | Probe the endpoint in `.env` for supported features |
 | `make lock` | Re-resolve the pinned `requirements*.lock` files |
@@ -240,11 +240,12 @@ so a full run costs well under a cent.
   Containers mount it at `/notebooks`; override with `NOTEBOOKS_DIR`.
 - **Day 1** is edited by hand (in Colab). Tests only check that the package still matches the code in
   `day1/Practice.ipynb` (llm_client, prompt, paper, schemas); if you change one side, update the other.
-- **Day 2 onwards** is generated: edit `notebook_templates/dayN.py`, then `make notebooks`. Code cells
+- **Day 2 onwards** is generated: edit `notebook_templates/dayN.py`, then `make notebooks DAYS=N`. Code cells
   that teach a package function are generated from its source, and each ⏩ catch-up cell is built from
   the same strings as the teaching cells, so neither can drift. A test fails if a committed notebook
-  is out of date with its template. Don't edit generated notebooks in Colab: the next
-  `make notebooks` overwrites them.
+  is out of date with its template (days in `TEMPLATE_DAYS`, tools/build_notebooks.py). Don't edit generated
+  notebooks in Colab: the next `make notebooks` overwrites them. Day 2's notebooks have been edited in Colab
+  since, so they are no longer regenerated or checked against the template.
 - `make exec-notebooks` runs each Practice notebook four ways, each in a fresh kernel:
   1. **unsolved** (as participants get it): errors are allowed only in TODO-test cells;
   2. **solved** (TODOs filled in): zero errors, and every TODO test prints ✅;

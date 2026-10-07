@@ -31,16 +31,17 @@ def test_check_gateway_reports_max_tokens_quirk(mock):
 
 
 def test_generated_notebooks_match_templates():
-    """notebooks/day2+ must be regenerated (`make notebooks`) after editing notebook_templates/."""
+    """Generated notebooks must be regenerated (`make notebooks`) after editing notebook_templates/."""
     bn = load("build_notebooks")
-    stale = [str(p) for p, builder in bn.targets() if not p.exists() or p.read_text() != bn.render(builder)]
+    stale = [str(p) for p, builder in bn.targets(bn.TEMPLATE_DAYS)
+             if not p.exists() or p.read_text() != bn.render(builder)]
     assert not stale, f"run `make notebooks`: {stale}"
 
 
 def test_generated_practice_follows_conventions():
     import json
     bn = load("build_notebooks")
-    for path, _ in bn.targets():
+    for path, _ in bn.targets(bn.TEMPLATE_DAYS):          # Day 2 is now edited in Colab (see build_notebooks.py)
         if path.name != "Practice.ipynb":
             continue
         cells = json.loads(path.read_text())["cells"]
