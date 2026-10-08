@@ -145,6 +145,7 @@ cached: 2,176`. mock-llm reports cached tokens when a request repeats ≥ 1,024 
 | ImportError: create_agent or a middleware name | Checked by version | `ToolErrorMiddleware` first ships in **langchain 1.3.14**; older 1.x raises ImportError on it. 3.0 now detects version drift and asks for a restart. |
 | 400 mentioning tools | Partly | The mock can only send a generic 400 (`X-Mock-Status: 400`); ChatOpenAI raises `BadRequestError` with the provider's message. |
 | Agent answers without calling a tool | No | The mock always uses a tool when tools are offered. |
+| *(new)* 400 "Function call is missing a thought_signature" in 4.1 | Yes (`gemini*` models on the mock) | Gemini's thinking models sign each tool call, and plain `ChatOpenAI` drops the signature, so the second model call fails. Fixed by `ToolCallSignatures` in 3.1; a participant who sees it is running an old copy of the notebook: reopen it from GitHub, run 3.0 and 3.1. |
 | GraphRecursionError in 4.5 | Yes | Expected, caught by `stream_trace` and printed with the cost line. |
 | Interrupt never appears in 5.6 | **Differs** | Without a checkpointer the interrupt **does** appear (`result["__interrupt__"]`); resuming then raises `RuntimeError: Cannot use Command(resume=...) without checkpointer`. `build_agent()` always passes one. |
 | Resume in 5.6 does nothing | **Differs** | `Command(resume=...)` on another thread_id starts a fresh run on an empty thread (on the mock it fails with a 400 from the embedding call); the paused run stays paused on its own thread. |

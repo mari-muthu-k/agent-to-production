@@ -272,3 +272,48 @@ def test_after_model_saboteur_from_the_notebook_is_caught(day3, mock):
         return None
     trace = run(build_agent(middleware=[citation_check, cite_chunk_99], store=InMemoryStore()), Q.MAIN_RESULT, "sab")
     assert trace.answer.startswith("I couldn't verify the citations")
+
+
+# --- Gemini thought signatures (found in Colab with a Gemini model, 4.1) ---------------------------
+def test_plain_chat_openai_loses_geminis_thought_signatures(day3, mock):
+    """mock-llm signs tool calls for gemini* models, like Gemini; langchain-openai drops the signature."""
+    import openai
+    from langchain_openai import ChatOpenAI
+    plain = ChatOpenAI(base_url=f"{mock.url}/v1", api_key="sk-mock-local", model="gemini-mock", temperature=0,
+                       max_retries=0)
+    with pytest.raises(openai.BadRequestError, match="thought_signature"):
+        build_agent(model=plain, store=InMemoryStore()).invoke(
+            {"messages": [{"role": "user", "content": Q.LONG_FILE_CLAIM}]}, run_config("sig-1"), context=Context("u"))
+
+
+def test_make_chat_model_sends_the_signatures_back(day3, mock):
+    from paper_agent.agent.model import EXTRA, make_chat_model
+    trace = run(build_agent(model=make_chat_model(model="gemini-mock"), store=InMemoryStore()), Q.LONG_FILE_CLAIM,
+                "sig-2")
+    calls = [m for m in this_run(trace.messages) if isinstance(m, AIMessage) and m.tool_calls]
+    assert trace.error is None and len(calls) == 3 and "31%" in trace.answer
+    assert all(len(m.additional_kwargs[EXTRA]) == len(m.tool_calls) for m in calls)
+
+
+def test_signatures_survive_rewritten_tool_call_ids_and_fall_back_for_gemini():
+    """Matched by position, not id; a Gemini call with no signature gets Google's placeholder."""
+    import warnings
+
+    from langchain_core.messages import HumanMessage
+
+    from paper_agent.agent.model import EXTRA, SKIP_SIGNATURE, make_chat_model
+    signed = {"google": {"thought_signature": "abc"}}
+    history = [HumanMessage("q"),
+               AIMessage("", tool_calls=[{"name": "search_paper", "args": {"query": "q"}, "id": "rewritten-id"}],
+                         additional_kwargs={EXTRA: [signed]}),
+               ToolMessage("result", tool_call_id="rewritten-id"),
+               AIMessage("", tool_calls=[{"name": "get_section", "args": {"section_id": "results"}, "id": "x2"}]),
+               ToolMessage("result", tool_call_id="x2")]
+    for name, second in (("gemini-3-flash", SKIP_SIGNATURE), ("gpt-4o-mini", None)):
+        model = make_chat_model(model=name, base_url="http://unused/v1", api_key="k")
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            payload = model._get_request_payload(history)
+        calls = [m["tool_calls"][0] for m in payload["messages"] if m.get("tool_calls")]
+        assert calls[0]["extra_content"] == signed
+        assert calls[1].get("extra_content") == second

@@ -10,7 +10,7 @@ and today's PDFs.
 """
 from pathlib import Path
 
-from nbgen import Notebook, clean, consts, defs, src
+from nbgen import Notebook, clean, consts, defs
 
 from paper_agent.agent import build, guards, memory, model, papers, prompts, questions, tools
 from paper_agent.cache import keys, prompt_cache, semantic, tool_cache
@@ -28,7 +28,7 @@ FILES = {"requirements-day3.txt": "paper-summarizer/requirements-day3.txt",
          **{p.name: f"notebooks/day3/{p.name}" for p in sorted(DAY3.glob("tinycoder_embeddings_day3*.json"))}}
 
 FETCH = rf'''
-import hashlib, importlib, importlib.metadata, json, os, re, shutil, sys, time, urllib.request
+import hashlib, importlib, importlib.metadata, json, os, re, shutil, sys, time, urllib.request, warnings
 from pathlib import Path
 REPO = "{REPO}"
 FILES = {FILES!r}
@@ -204,9 +204,12 @@ def practice() -> Notebook:
           "again. It is also the catch-up cell for Section 3.")
     nb.code(PRECOMPUTED_SWITCH + "\n" + SETUP)
     nb.md("### 3.1 Setup check\n\nLangChain's chat model, pointed at the same base URL as Day 1. You should see the "
-          "LangChain version and **ready**. Green tick in the chat when you do.")
-    nb.anchor("3.1").code(src(model.make_chat_model) + "\n\n\n" + consts(model, "MAX_TOKENS")
-                          + "\n\n\nmodel = make_chat_model()", carry=True)
+          "LangChain version and **ready**. Green tick in the chat when you do.\n\n"
+          "`ToolCallSignatures` is a small addition for Gemini: its thinking models sign every tool call and reject the "
+          "next request if the signature doesn't come back, which plain `ChatOpenAI` doesn't do yet.")
+    nb.anchor("3.1").code(consts(model, "MAX_TOKENS", "EXTRA", "SKIP_SIGNATURE") + "\n\n\n"
+                          + defs(model, "ToolCallSignatures", "make_chat_model") + "\n\n\nmodel = make_chat_model()",
+                          carry=True)
     nb.code(r'''
         # 3.1
         reply = model.invoke("Reply with one word: ready")

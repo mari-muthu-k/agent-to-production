@@ -7,6 +7,9 @@
     /mock/faults, /mock/stats, /mock/reset   control endpoints (see mock_llm/faults.py)
     /mock/mode                               Day 3 agent mode: injection obey|resist, force_citation (mock_llm/agent.py)
 
+Models named gemini* behave like Gemini's OpenAI-compatible endpoint with thinking on: every tool call carries
+extra_content.google.thought_signature, and a request whose history has a tool call without it gets a 400.
+
 Usage reports prompt_tokens_details.cached_tokens when a request repeats a long prefix of the previous
 one (>= 1,024 tokens, in blocks of 128), like providers with automatic prompt caching (Day 3, 6.5).
 
@@ -14,6 +17,7 @@ Lenient by default, so switching LLM_BASE_URL is the only change between offline
 any API key and model name work, except deliberately bad ones (patterns below) used in error demos.
 """
 import asyncio
+import base64
 import json
 import os
 import re
@@ -30,6 +34,7 @@ from mock_llm.faults import Fault, FaultQueue, fault_from_headers, merge
 
 REJECT_KEYS = re.compile(os.environ.get("MOCK_REJECT_KEYS", r"wrong|invalid|revoked|expired"), re.I)
 UNKNOWN_MODELS = re.compile(os.environ.get("MOCK_UNKNOWN_MODELS", r"^(no-such|unknown|does-not-exist|nonexistent)"))
+SIGNED_MODELS = re.compile(os.environ.get("MOCK_SIGNED_MODELS", r"^gemini"), re.I)   # thought signatures
 BROKEN_MODELS = re.compile(os.environ.get("MOCK_BROKEN_MODELS", r"^broken"))
 STRICT = os.environ.get("MOCK_STRICT", "0") == "1"
 API_KEYS = {k.strip() for k in os.environ.get("MOCK_API_KEYS", "sk-mock-local").split(",") if k.strip()}
@@ -107,6 +112,20 @@ def cached_prefix_tokens(messages: list, tools: Optional[list]) -> int:
         n += 1
     shared = text.count(prompt[:n])
     return 0 if shared < PREFIX_MIN_TOKENS else shared // PREFIX_BLOCK * PREFIX_BLOCK
+
+
+def thought_signature(call_id: str) -> str:
+    return base64.b64encode(f"mock-signature:{call_id}".encode()).decode()
+
+
+def unsigned_tool_call(messages: list) -> Optional[str]:
+    """The name of the first tool call in the history sent back without its thought signature, if any."""
+    for m in messages:
+        for call in m.get("tool_calls") or [] if m.get("role") == "assistant" else []:
+            signature = ((call.get("extra_content") or {}).get("google") or {}).get("thought_signature")
+            if signature not in (thought_signature(call.get("id", "")), "skip_thought_signature_validator"):
+                return (call.get("function") or {}).get("name", "?")
+    return None
 
 
 def mode_for(headers) -> "agent.Mode":
@@ -189,6 +208,10 @@ async def chat_completions(request: Request):
         return error(fault.status, fault.message or f"mock-injected HTTP {fault.status}", retry_after=fault.retry_after)
     if (resp := validate_chat(body, fault)) is not None:
         return resp
+    if SIGNED_MODELS.search(model) and (name := unsigned_tool_call(body["messages"])):
+        return error(400, "Function call is missing a thought_signature in functionCall parts. This is required for "
+                          f"tools to work correctly. Additional data, function call `default_api:{name}`. Please refer "
+                          "to https://ai.google.dev/gemini-api/docs/thought-signatures for more details.")
 
     n_prompt = prompt_tokens(body["messages"], body.get("tools"))
     if n_prompt > CONTEXT_TOKENS:
@@ -225,6 +248,9 @@ async def chat_completions(request: Request):
         finish_reason = "tool_calls"
         tool_calls = [{"id": c.id, "type": "function",
                        "function": {"name": c.name, "arguments": json.dumps(c.arguments)}} for c in reply.tool_calls]
+        if SIGNED_MODELS.search(model):
+            for call in tool_calls:
+                call["extra_content"] = {"google": {"thought_signature": thought_signature(call["id"])}}
         out_tokens = sum(text.count(t["function"]["arguments"]) for t in tool_calls) + 3
     else:
         content = text.apply_stop(content, body.get("stop"))
