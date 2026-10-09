@@ -27,12 +27,19 @@ anyio==4.15.1
     #   -c requirements.lock
     #   httpx
     #   httpx2
+    #   jupyter-server
     #   langsmith
     #   openai
     #   starlette
     #   watchfiles
 appnope==1.0.0 ; sys_platform == 'darwin'
     # via ipykernel
+argon2-cffi==25.1.0
+    # via jupyter-server
+argon2-cffi-bindings==26.1.0
+    # via argon2-cffi
+arrow==1.4.0
+    # via isoduration
 asttokens==3.0.2
     # via stack-data
 attrs==26.1.0
@@ -45,6 +52,10 @@ bcrypt==5.0.0
     # via
     #   -c requirements.lock
     #   chromadb
+beautifulsoup4==4.15.0
+    # via nbconvert
+bleach==6.4.0
+    # via nbconvert
 boto3==1.43.110
     # via
     #   -c requirements.lock
@@ -66,9 +77,10 @@ certifi==2026.7.22
     #   kubernetes
     #   langchain-openai
     #   requests
-cffi==2.1.1 ; implementation_name == 'pypy' or platform_python_implementation != 'PyPy'
+cffi==2.1.1
     # via
     #   -c requirements.lock
+    #   argon2-cffi-bindings
     #   cryptography
     #   pyzmq
 charset-normalizer==3.5.2
@@ -103,6 +115,8 @@ cryptography==50.0.2
     #   pdfminer-six
 debugpy==1.8.22
     # via ipykernel
+defusedxml==0.7.1
+    # via nbconvert
 distro==1.9.0
     # via
     #   -c requirements.lock
@@ -133,6 +147,8 @@ flatbuffers==25.12.19
     # via
     #   -c requirements.lock
     #   onnxruntime
+fqdn==1.6.0
+    # via jsonschema
 frozenlist==1.8.0
     # via
     #   -c requirements.lock
@@ -215,6 +231,7 @@ idna==3.20
     #   anyio
     #   httpx
     #   httpx2
+    #   jsonschema
     #   requests
     #   yarl
 importlib-metadata==8.9.0
@@ -233,12 +250,16 @@ ipython==9.17.1
     # via ipykernel
 ipython-pygments-lexers==1.1.1
     # via ipython
+isoduration==20.11.0
+    # via jsonschema
 jedi==0.20.0
     # via ipython
 jinja2==3.1.6
     # via
     #   -c requirements.lock
+    #   jupyter-server
     #   litellm
+    #   nbconvert
 jiter==0.17.0
     # via
     #   -c requirements.lock
@@ -256,10 +277,12 @@ jsonpointer==3.2.0
     # via
     #   -c requirements.lock
     #   jsonpatch
+    #   jsonschema
 jsonschema==4.26.0
     # via
     #   -c requirements.lock
     #   chromadb
+    #   jupyter-events
     #   litellm
     #   nbformat
 jsonschema-specifications==2025.9.1
@@ -269,13 +292,24 @@ jsonschema-specifications==2025.9.1
 jupyter-client==8.10.0
     # via
     #   ipykernel
+    #   jupyter-server
     #   nbclient
 jupyter-core==5.9.1
     # via
     #   ipykernel
     #   jupyter-client
+    #   jupyter-server
     #   nbclient
+    #   nbconvert
     #   nbformat
+jupyter-events==0.12.1
+    # via jupyter-server
+jupyter-server==2.21.1
+    # via paper-agent (pyproject.toml)
+jupyter-server-terminals==0.5.4
+    # via jupyter-server
+jupyterlab-pygments==0.3.0
+    # via nbconvert
 kubernetes==36.0.3
     # via
     #   -c requirements.lock
@@ -335,6 +369,8 @@ langsmith==0.14.4
     # via
     #   -c requirements.lock
     #   langchain-core
+lark==1.3.1
+    # via rfc3987-syntax
 litellm==1.104.2
     # via
     #   -c requirements.lock
@@ -348,6 +384,7 @@ markupsafe==3.0.4
     # via
     #   -c requirements.lock
     #   jinja2
+    #   nbconvert
 matplotlib-inline==0.2.2
     # via
     #   ipykernel
@@ -356,6 +393,8 @@ mdurl==0.1.2
     # via
     #   -c requirements.lock
     #   markdown-it-py
+mistune==3.3.4
+    # via nbconvert
 mmh3==5.3.1
     # via
     #   -c requirements.lock
@@ -366,11 +405,17 @@ multidict==6.9.1
     #   aiohttp
     #   yarl
 nbclient==0.11.0
-    # via paper-agent (pyproject.toml)
+    # via
+    #   paper-agent (pyproject.toml)
+    #   nbconvert
+nbconvert==7.17.1
+    # via jupyter-server
 nbformat==5.11.1
     # via
     #   paper-agent (pyproject.toml)
+    #   jupyter-server
     #   nbclient
+    #   nbconvert
 nest-asyncio2==1.7.3
     # via ipykernel
 numpy==2.4.6 ; python_full_version < '3.12'
@@ -449,17 +494,23 @@ overrides==7.7.0
     # via
     #   -c requirements.lock
     #   chromadb
+    #   jupyter-server
 packaging==26.3
     # via
     #   -c requirements.lock
     #   build
     #   huggingface-hub
     #   ipykernel
+    #   jupyter-events
+    #   jupyter-server
     #   langchain-core
     #   langsmith
     #   litellm
+    #   nbconvert
     #   onnxruntime
     #   pytest
+pandocfilters==1.5.1
+    # via nbconvert
 parso==0.8.7
     # via jedi
 pdfminer-six==20260107
@@ -481,6 +532,8 @@ platformdirs==4.12.2
     # via jupyter-core
 pluggy==1.6.0
     # via pytest
+prometheus-client==0.26.0
+    # via jupyter-server
 prompt-toolkit==3.0.53
     # via ipython
 propcache==0.5.4
@@ -496,15 +549,17 @@ protobuf==7.36.2
     #   opentelemetry-proto
 psutil==7.2.2 ; sys_platform != 'cygwin' and sys_platform != 'emscripten'
     # via ipython
-ptyprocess==0.7.0 ; sys_platform != 'emscripten' and sys_platform != 'win32'
-    # via pexpect
+ptyprocess==0.7.0 ; os_name != 'nt' or (sys_platform != 'emscripten' and sys_platform != 'win32')
+    # via
+    #   pexpect
+    #   terminado
 pure-eval==0.2.4
     # via stack-data
 pybase64==1.5.0
     # via
     #   -c requirements.lock
     #   chromadb
-pycparser==3.0 ; (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy') or (implementation_name == 'pypy' and platform_python_implementation == 'PyPy')
+pycparser==3.0 ; implementation_name != 'PyPy'
     # via
     #   -c requirements.lock
     #   cffi
@@ -536,6 +591,7 @@ pygments==2.21.0
     #   -c requirements.lock
     #   ipython
     #   ipython-pygments-lexers
+    #   nbconvert
     #   pytest
     #   rich
 pypdf==6.19.0
@@ -559,6 +615,7 @@ pytest==9.1.1
 python-dateutil==2.9.0.post0
     # via
     #   -c requirements.lock
+    #   arrow
     #   botocore
     #   jupyter-client
     #   kubernetes
@@ -568,15 +625,23 @@ python-dotenv==1.2.4
     #   litellm
     #   pydantic-settings
     #   uvicorn
+python-json-logger==4.2.0
+    # via jupyter-events
 python-multipart==0.0.32
     # via
     #   -c requirements.lock
     #   paper-agent (pyproject.toml)
+pywinpty==3.0.5 ; os_name == 'nt'
+    # via
+    #   jupyter-server
+    #   jupyter-server-terminals
+    #   terminado
 pyyaml==6.0.3
     # via
     #   -c requirements.lock
     #   chromadb
     #   huggingface-hub
+    #   jupyter-events
     #   kubernetes
     #   langchain-core
     #   litellm
@@ -585,11 +650,13 @@ pyzmq==27.2.0
     # via
     #   ipykernel
     #   jupyter-client
+    #   jupyter-server
 referencing==0.37.0
     # via
     #   -c requirements.lock
     #   jsonschema
     #   jsonschema-specifications
+    #   jupyter-events
 regex==2026.9.29
     # via
     #   -c requirements.lock
@@ -615,6 +682,16 @@ requests-toolbelt==1.0.0
     # via
     #   -c requirements.lock
     #   langsmith
+rfc3339-validator==0.1.4
+    # via
+    #   jsonschema
+    #   jupyter-events
+rfc3986-validator==0.1.1
+    # via
+    #   jsonschema
+    #   jupyter-events
+rfc3987-syntax==1.1.0
+    # via jsonschema
 rich==15.0.0
     # via
     #   -c requirements.lock
@@ -631,6 +708,8 @@ s3transfer==0.19.2
     # via
     #   -c requirements.lock
     #   boto3
+send2trash==2.1.0
+    # via jupyter-server
 shellingham==1.5.4
     # via
     #   -c requirements.lock
@@ -640,11 +719,14 @@ six==1.17.0
     #   -c requirements.lock
     #   kubernetes
     #   python-dateutil
+    #   rfc3339-validator
 sniffio==1.3.1
     # via
     #   -c requirements.lock
     #   langsmith
     #   openai
+soupsieve==2.10
+    # via beautifulsoup4
 stack-data==0.6.3
     # via ipython
 starlette==1.7.0
@@ -656,12 +738,18 @@ tenacity==9.2.1
     #   -c requirements.lock
     #   chromadb
     #   langchain-core
+terminado==0.18.1
+    # via
+    #   jupyter-server
+    #   jupyter-server-terminals
 tiktoken==0.14.0
     # via
     #   -c requirements.lock
     #   paper-agent (pyproject.toml)
     #   langchain-openai
     #   litellm
+tinycss2==1.5.1
+    # via bleach
 tokenizers==0.23.2
     # via
     #   -c requirements.lock
@@ -671,6 +759,8 @@ tornado==6.5.10
     # via
     #   ipykernel
     #   jupyter-client
+    #   jupyter-server
+    #   terminado
 tqdm==4.70.1
     # via
     #   -c requirements.lock
@@ -683,8 +773,11 @@ traitlets==5.16.1
     #   ipython
     #   jupyter-client
     #   jupyter-core
+    #   jupyter-events
+    #   jupyter-server
     #   matplotlib-inline
     #   nbclient
+    #   nbconvert
     #   nbformat
 truststore==0.10.4 ; sys_platform != 'emscripten'
     # via
@@ -701,6 +794,7 @@ typing-extensions==4.16.0
     #   aiohttp
     #   aiosignal
     #   anyio
+    #   beautifulsoup4
     #   chromadb
     #   fastapi
     #   grpcio
@@ -728,6 +822,10 @@ typing-inspection==0.4.4
     #   fastapi
     #   pydantic
     #   pydantic-settings
+tzdata==2026.5
+    # via arrow
+uri-template==1.3.0
+    # via jsonschema
 urllib3==2.8.0
     # via
     #   -c requirements.lock
@@ -754,9 +852,16 @@ watchfiles==1.3.0
     #   uvicorn
 wcwidth==0.9.1
     # via prompt-toolkit
+webcolors==25.10.0
+    # via jsonschema
+webencodings==0.6.1
+    # via
+    #   bleach
+    #   tinycss2
 websocket-client==1.9.2
     # via
     #   -c requirements.lock
+    #   jupyter-server
     #   kubernetes
 websockets==16.1.1
     # via

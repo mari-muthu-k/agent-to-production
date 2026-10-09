@@ -44,6 +44,7 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 |---|---|
 | `make up` / `make down` | Start / stop the Day 4 stack: `mock-llm`, `gateway` (LiteLLM proxy), `postgres`, `redis`, `api` |
 | `make api` | Start the api (`http://localhost:8200`, `GATEWAY_MODE=proxy`) and the gateway it needs |
+| `make demo` / `make demo-run` | Day 4 instructor demo: the stack + a Jupyter server for VS Code (`http://127.0.0.1:8888/?token=day4-demo`) / or run it headless |
 | `make keys` | Demo virtual keys for alice, bob and eval-bot on the gateway → `keys.local.json` (gitignored) |
 | `make eval` / `make eval-baseline` | The 20-question golden set through the api; `eval` exits 1 on a regression vs `paper_agent/evals/baseline.json` (`PROMPT_VERSION=v2 make eval` is blocked) |
 | `make test` | `pytest` against `mock-llm`. No API keys needed |

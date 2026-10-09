@@ -136,10 +136,13 @@ that takes 3 steps instead of 2 or writes up to `max_tokens = 400` per answer co
 | redis | `redis:7.4-alpine` (59 MB) | rate-limit counters, response cache (opt-in) |
 | api | `paper-summarizer-runtime` (1.26 GB, was 464 MB) | the service, `GATEWAY_MODE=proxy` |
 
-Cold `docker compose up` with images cached and empty volumes: **25 s** to all healthy. Run the demo
-notebook with `make exec-notebooks NB=day4/Day4_Instructor_Demo` (executed copy in `build/executed/`), or open
-it in VS Code attached to the `tests` container; it also works from the host against `localhost:4000/8200` with
-a Python that has the pins installed.
+Cold `docker compose up` with images cached and empty volumes: **25 s** to all healthy.
+
+**Running the demo:** `make demo` starts the stack plus a Jupyter server inside the compose network
+(`127.0.0.1:8888`, token `day4-demo`). In VS Code open `notebooks/day4/Day4_Instructor_Demo.ipynb`, then
+**Select Kernel → Existing Jupyter Server →** `http://127.0.0.1:8888/?token=day4-demo` **→ Python 3**; VS Code
+remembers the server for next time. `make demo-run` runs every cell headless instead (outputs in
+`build/executed/`). `make down` stops everything.
 
 Measured on proxy 1.104.2:
 

@@ -3,7 +3,7 @@ COMPOSE := docker compose
 RUN := $(COMPOSE) run --rm
 
 .DEFAULT_GOAL := help
-.PHONY: help env build up down sync-day1 test test-gateway lint mock gateway api keys eval eval-baseline notebooks exec-notebooks check-gateway lock logs clean
+.PHONY: help env build up down sync-day1 test test-gateway lint mock gateway api keys demo demo-run eval eval-baseline notebooks exec-notebooks check-gateway lock logs clean
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -23,7 +23,7 @@ api: env  ## Start the api (and the gateway it needs); GATEWAY_MODE=proxy
 	$(COMPOSE) up -d --build --wait api
 
 down:  ## Stop everything (keeps volumes)
-	$(COMPOSE) --profile tools --profile ui down
+	$(COMPOSE) --profile tools --profile ui --profile demo down
 
 test: env  ## Run pytest against mock-llm (no API keys needed)
 	$(RUN) tests
@@ -35,6 +35,20 @@ test-gateway: env  ## Proxy-mode tests: gateway + postgres + redis + api against
 keys: env  ## Create demo virtual keys (alice, bob, eval-bot) on the gateway -> keys.local.json (gitignored)
 	$(COMPOSE) up -d --wait gateway
 	$(RUN) --no-deps tests python tools/make_keys.py
+
+JUPYTER_URL = http://127.0.0.1:$${JUPYTER_PORT:-8888}/?token=$${JUPYTER_TOKEN:-day4-demo}
+demo: env  ## Day 4 instructor demo: start the stack + a Jupyter kernel for VS Code (run the cells yourself)
+	$(COMPOSE) --profile demo up -d --build --wait $(STACK) jupyter
+	@echo ""
+	@echo "Ready. In VS Code, open notebooks/day4/Day4_Instructor_Demo.ipynb, then:"
+	@echo "  Select Kernel -> Existing Jupyter Server -> paste: $(JUPYTER_URL) -> Python 3"
+	@echo "VS Code remembers this server; next time just pick it. Stop with: make down"
+
+DEMO_OUT := build/executed/day4-Day4_Instructor_Demo-full/day4/Day4_Instructor_Demo.ipynb
+demo-run: env  ## Day 4 instructor demo, headless: run every cell and save the outputs
+	$(COMPOSE) up -d --build --wait $(STACK)
+	$(RUN) --no-deps tests python tools/exec_notebooks.py day4/Day4_Instructor_Demo
+	@echo "outputs: $(DEMO_OUT)"
 
 PROMPT_VERSION ?= v1
 eval: env  ## Run the 20-question golden set against the api; exit 1 on a regression vs evals/baseline.json
@@ -77,6 +91,6 @@ logs:  ## Follow service logs
 	$(COMPOSE) logs -f
 
 clean:  ## Stop, remove containers, images and generated files
-	$(COMPOSE) --profile tools --profile ui down --rmi local --volumes --remove-orphans
+	$(COMPOSE) --profile tools --profile ui --profile demo down --rmi local --volumes --remove-orphans
 	rm -rf build .pytest_cache .ruff_cache logs/*.log
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

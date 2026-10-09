@@ -50,6 +50,7 @@ dev = [
     "openai",       # tests only: proves mock-llm stays OpenAI-compatible (the LiteLLM gateway relies on it)
     "ipykernel",    # a kernel for tools/exec_notebooks.py (no Jupyter server: notebooks run in Colab)
     "nbclient",     # tools/exec_notebooks.py
+    "jupyter-server",   # `make demo`: a kernel VS Code connects to, inside the Docker network (Day 4 demo)
     "nbformat",
 ]
 

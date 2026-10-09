@@ -84,6 +84,39 @@ services:
         condition: service_healthy
     command: ["pytest", "-q"]
 
+  jupyter:
+    # `make demo`: a Jupyter server inside the compose network, so VS Code can run the Day 4 instructor demo
+    # against gateway:4000 and api:8000. Bound to 127.0.0.1 only; the token is a local convenience, not a secret.
+    <<: *dev-image
+    profiles: ["demo"]
+    environment:
+      LLM_BASE_URL: http://mock-llm:8000/v1
+      LLM_API_KEY: sk-mock-local
+      LLM_MODEL: mock-llm
+      LLM_FALLBACK_MODEL: mock-llm-fallback
+      EMBED_MODEL: mock-embed
+      NO_PROXY: localhost,127.0.0.1,mock-llm,gateway,api
+      no_proxy: localhost,127.0.0.1,mock-llm,gateway,api
+      NOTEBOOKS_DIR: /notebooks
+      COURSE_REPO: /course
+      GATEWAY_URL: http://gateway:4000
+      API_URL: http://api:8000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    command: ["jupyter", "server", "--ip=0.0.0.0", "--port=8888", "--no-browser",
+              "--ServerApp.token=${JUPYTER_TOKEN:-day4-demo}", "--ServerApp.root_dir=/notebooks",
+              "--ServerApp.allow_origin=*"]
+    volumes:
+      - ./:/workspace
+      - ../notebooks:/notebooks
+      - ../:/course:ro
+    ports:
+      - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   gateway:
     # LiteLLM proxy: core from Day 4. Virtual keys, budgets and spend in Postgres; rate limits and cache in Redis.
     image: ghcr.io/berriai/litellm:v1.104.2      # the same LiteLLM version as the library pin (requirements.lock)
