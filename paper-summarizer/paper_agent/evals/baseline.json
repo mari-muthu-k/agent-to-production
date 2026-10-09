@@ -1,0 +1,17 @@
+{
+  "metrics": {
+    "valid_citations": 1.0,
+    "cited": 1.0,
+    "right_section": 0.86,
+    "faithful": 1.0,
+    "refused_correctly": 1.0,
+    "hype_free": 1.0,
+    "readability": 33.5,
+    "recall_at_k": 1.0,
+    "page_accuracy": 0.93
+  },
+  "prompt_version": "v1",
+  "judge_version": "judge_v1",
+  "model": "mock-llm",
+  "date": "2026-10-09"
+}

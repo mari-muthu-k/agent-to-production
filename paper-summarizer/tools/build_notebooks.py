@@ -1,6 +1,7 @@
 """Generate the workshop notebooks from templates (Day 2 onwards).
 
-Notebooks live at the course repo root, <repo>/notebooks/dayN/{Practice,Demo}.ipynb, so they can be
+Notebooks live at the course repo root, <repo>/notebooks/dayN/{Practice,Demo}.ipynb (Day 4:
+Day4_CodeAlong.ipynb, Day4_Instructor_Demo.ipynb), so they can be
 opened straight from GitHub in Google Colab. Override the location with NOTEBOOKS_DIR.
 
 Day 1 is edited by hand (in Colab) and is never touched by this script.
@@ -21,10 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "notebook_templates")]
 NOTEBOOKS = Path(os.environ.get("NOTEBOOKS_DIR") or ROOT.parent / "notebooks")
-GENERATED_DAYS = [2, 3]
+GENERATED_DAYS = [2, 3, 4]
 # Days whose committed notebooks must equal their template (tests/test_tools.py). Day 2's notebooks were
 # edited in Colab after generation, so they are no longer checked.
-TEMPLATE_DAYS = [3]
+TEMPLATE_DAYS = [3, 4]
 
 
 def targets(days=GENERATED_DAYS) -> list:
@@ -32,8 +33,8 @@ def targets(days=GENERATED_DAYS) -> list:
     out = []
     for day in days:
         mod = importlib.import_module(f"day{day}")
-        out += [(NOTEBOOKS / f"day{day}" / "Practice.ipynb", mod.practice),
-                (NOTEBOOKS / f"day{day}" / "Demo.ipynb", mod.demo)]
+        practice, demo = getattr(mod, "NAMES", ("Practice.ipynb", "Demo.ipynb"))     # Day 4: the guide's names
+        out += [(NOTEBOOKS / f"day{day}" / practice, mod.practice), (NOTEBOOKS / f"day{day}" / demo, mod.demo)]
     return out
 
 

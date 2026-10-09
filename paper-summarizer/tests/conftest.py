@@ -132,3 +132,73 @@ def day3(mock_url, tmp_path_factory):
             os.environ[k] = v
     for k, v in saved_globals.items():
         setattr(day2, k, v)
+
+
+# --- Day 4 ---------------------------------------------------------------------------------------
+DAY4_ENV = {"LLM_API_KEY": "sk-mock-local", "LLM_MODEL": "mock-llm", "LLM_FALLBACK_MODEL": "mock-llm-fallback",
+            "EMBED_MODEL": "mock-embed"}
+DAY2_GLOBALS = ("llm", "EMBED_MODEL", "collection", "USE_PRECOMPUTED", "PRECOMPUTED")
+
+
+class Day4:
+    """What the Day 4 tests share: a library-mode Router on mock-llm, an index with TinyCoder in it."""
+
+    def __init__(self, mock_url, folder):
+        from paper_agent.fixtures.tinycoder_pdf import make_pdf
+        from paper_agent.service.gateway import make_router
+        from paper_agent.service.store import PaperStore, setup_retrieval
+        self.mock_url, self.folder = mock_url, folder
+        self.env = {**DAY4_ENV, "LLM_BASE_URL": f"{mock_url}/v1"}
+        with self.active():
+            self.router = make_router()
+            setup_retrieval(self.router, folder)
+            self.globals = {k: getattr(_day2(), k) for k in DAY2_GLOBALS}
+            self.store = PaperStore(folder)
+            self.pdf = make_pdf()
+            self.paper_id, _ = self.store.ingest(self.pdf)
+
+    def calls(self) -> int:
+        return requests.get(f"{self.mock_url}/calls", timeout=5).json()["calls"]
+
+    def active(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def ctx():
+            saved_env = {k: os.environ.get(k) for k in self.env}
+            day2 = _day2()
+            saved = {k: getattr(day2, k) for k in DAY2_GLOBALS}
+            os.environ.update(self.env)
+            for k, v in getattr(self, "globals", {}).items():
+                setattr(day2, k, v)
+            try:
+                yield self
+            finally:
+                for k, v in saved_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+                for k, v in saved.items():
+                    setattr(day2, k, v)
+        return ctx()
+
+
+def _day2():
+    from paper_agent.rag import pdf_rag
+    return pdf_rag
+
+
+@pytest.fixture(scope="session")
+def day4_state(mock_url, tmp_path_factory):
+    return Day4(mock_url, str(tmp_path_factory.mktemp("day4")))
+
+
+@pytest.fixture
+def day4(day4_state):
+    """Day 4's state, with Day 2's module globals pointed at it for this test only (Day 3 tests use others)."""
+    from paper_agent.service import app, usage
+    with day4_state.active():
+        usage.SPEND.clear(), usage.CALLS.clear(), usage.BUDGETS.clear()
+        app.RPM_LIMITS.clear(), app.HITS.clear()
+        yield day4_state

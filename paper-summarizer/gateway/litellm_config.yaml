@@ -1,9 +1,12 @@
-# LiteLLM proxy (profile `gateway`). M0: forwarding, retries, fallback only; no database.
-# M3 adds Postgres (virtual keys, budgets, spend) and Redis (cache, rate-limit state).
+# LiteLLM proxy (the `gateway` service; core from Day 4). The production version of what the Day 4 notebook
+# runs as a library (paper_agent/service/gateway.py make_router): same aliases, fallback, retries and timeout.
 #
-# Upstream comes from .env (PROVIDER_*). Default upstream is mock-llm, so you can rehearse
-# the gateway fully offline. Clients call it with LLM_BASE_URL=http://gateway:4000/v1,
-# LLM_API_KEY=$LITELLM_MASTER_KEY and LLM_MODEL=paper-explainer.
+#   Postgres  virtual keys, per-key budgets (max_budget / budget_duration) and spend   (DATABASE_URL)
+#   Redis     rate-limit counters (rpm_limit / tpm_limit) shared by every proxy instance, and the response cache
+#
+# Upstream comes from .env (PROVIDER_*). The default upstream is mock-llm, so the whole stack rehearses offline;
+# pointing it at a real provider changes only .env. Clients call http://gateway:4000/v1 with model
+# "paper-explainer" and their own virtual key (`make keys`).
 
 model_list:
   - model_name: paper-explainer
@@ -11,23 +14,62 @@ model_list:
       model: os.environ/PROVIDER_MODEL
       api_base: os.environ/PROVIDER_BASE_URL
       api_key: os.environ/PROVIDER_API_KEY
+      max_tokens: 400                     # every call is capped, which also caps the budget overshoot
+      # Prices for spend tracking: the workshop's $0.15 / $0.60 per 1M tokens. Without them the proxy prices
+      # an unknown model (mock-llm, many free models) at $0 and no budget is ever reached. Change for your model.
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000006
+    model_info:
+      id: primary                          # sent back as the x-litellm-model-id header: "who answered"
   - model_name: paper-explainer-fallback
     litellm_params:
       model: os.environ/PROVIDER_FALLBACK_MODEL
       api_base: os.environ/PROVIDER_BASE_URL
       api_key: os.environ/PROVIDER_API_KEY
+      max_tokens: 400
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000006
+    model_info:
+      id: fallback
+  - model_name: paper-explainer-broken    # instructor demo D5.2 only: a primary that doesn't exist, so the
+    litellm_params:                       # fallback answers (the provider returns 404 / 400 for it)
+      model: openai/this-model-does-not-exist
+      api_base: os.environ/PROVIDER_BASE_URL
+      api_key: os.environ/PROVIDER_API_KEY
+      max_tokens: 400
+    model_info:
+      id: broken-primary
   - model_name: paper-embed
     litellm_params:
       model: os.environ/PROVIDER_EMBED_MODEL
       api_base: os.environ/PROVIDER_BASE_URL
       api_key: os.environ/PROVIDER_API_KEY
+    model_info:
+      id: embed
+      mode: embedding
 
-litellm_settings:
-  num_retries: 2            # the gateway is the only retry layer when apps call it
-  request_timeout: 60
+router_settings:
+  num_retries: 2                          # the gateway is the ONE retry layer (the api's client makes one attempt)
+  timeout: 30
   fallbacks:
     - paper-explainer: ["paper-explainer-fallback"]
-  drop_params: true         # drop params an upstream doesn't support instead of failing
+    - paper-explainer-broken: ["paper-explainer-fallback"]
+  disable_cooldowns: true                 # same as the notebook's Router: a demo failure doesn't bench the model
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+
+litellm_settings:
+  drop_params: true                       # drop params an upstream doesn't support instead of failing
+  cache: true                             # exact-match response cache in Redis (Day 3's cache, now shared) ...
+  cache_params:
+    mode: default_off                     # ... opt-in per request ({"cache": {"use-cache": true}}): a cached
+                                          # reply costs $0, which would hide the budget and eval demos
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    ttl: 600
+  set_verbose: false
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

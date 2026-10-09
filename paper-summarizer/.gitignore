@@ -16,3 +16,5 @@ data/notes/
 build/executed/
 # your organisation's CA certificates (see certs/README.md)
 certs/*.crt
+# Day 4: demo virtual keys from `make keys` (local gateway only)
+keys.local.json

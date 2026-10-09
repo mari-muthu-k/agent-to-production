@@ -227,3 +227,5 @@ site/
 .claude/settings.local.json
 reference
 archive
+# Day 4: the executed backup from `make exec-notebooks` (mock-llm outputs; regenerate any time)
+notebooks/day4/executed/

@@ -14,6 +14,9 @@ deterministic offline and reads like a real model's trace:
      In "resist" mode, or once the guard has wrapped the text, they are ignored (5.4-5.8)
   5. after the tools: an answer built from the returned chunks, citing their ids; "force_citation" adds
      a citation of a chunk that was never retrieved (5.7)
+  6. Day 4: the system prompt's own rules decide two things. If it gives an exact refusal sentence and the
+     chunks don't cover the question's key terms, the answer is that sentence (7.1's funding and learning-rate
+     questions). If it says "no brackets or reference markers" (prompt v2, 7.5), the answer cites nothing.
 
 Switch modes with headers (X-Mock-Injection: obey|resist, X-Mock-Force-Citation: c99) or POST /mock/mode.
 """
@@ -162,8 +165,10 @@ def evidence(chunk: Chunk) -> list:
     def prose(line: str) -> bool:
         words = line.split()
         numeric = sum(any(ch.isdigit() for ch in w) for w in words)
+        title_case = sum(w[:1].isupper() for w in words) > 0.6 * len(words)        # a title line
         return (len(words) >= 8 and not re.fullmatch(r"(\d+(\.\d+)*\s+)?[A-Z][\w ,:&()'/-]{2,60}", line.strip())
-                and not line.startswith("Table ") and numeric <= len(words) // 3)
+                and not line.startswith("Table ") and numeric <= len(words) // 3 and not title_case
+                and "fictional" not in line.lower())
     lines = [ln for ln in chunk.text.splitlines() if prose(ln)]
     out = []
     for s in sentences(" ".join(" ".join(lines).split())):
@@ -225,6 +230,32 @@ def compose(run: Run, req, mode: Mode, obey: bool) -> str:
     return answer + _forced(mode)
 
 
+REFUSAL_RULE = re.compile(r"reply with exactly this sentence and nothing else:\s*(.+?)\s*$", re.I | re.M)
+NO_MARKERS = re.compile(r"\bno (square )?brackets\b|\bno reference markers\b"
+                        r"|\bwithout (any )?(citation|reference) markers\b", re.I)
+GENERIC = {"tinycoder", "model", "author", "authors", "train", "trained", "training", "much", "many", "main"}
+
+
+def covered(question: str, chunks: list) -> bool:
+    """Do the retrieved chunks mention at least half of the question's key terms? (6-letter stems)"""
+    key = content_words(question) - GENERIC
+    if not key:
+        return True
+    seen = content_words(" ".join(c.text for c in chunks))
+    found = [w for w in key if any(t.startswith(w[:6]) for t in seen)]
+    return len(found) / len(key) >= 0.5
+
+
+def follow_prompt_rules(answer: str, run: "Run", req) -> str:
+    """Day 4 (rule 6 above): refuse with the prompt's exact sentence, or drop citation markers."""
+    refusal = REFUSAL_RULE.search(req.system)
+    if refusal and run.chunks() and not covered(run.question, run.chunks()):
+        return refusal.group(1).strip()
+    if NO_MARKERS.search(req.system):
+        answer = " ".join(re.sub(r"\s*\[[A-Za-z0-9][\w.:-]{0,39}\]", "", answer).split())
+    return answer
+
+
 def _forced(mode: Mode) -> str:
     return f" See also [{mode.force_citation}]." if mode.force_citation else ""
 
@@ -238,4 +269,4 @@ def respond(req, fault, mode: Mode) -> Reply:
     if calls:
         n = sum(len(m.get("tool_calls") or []) for m in req.messages)
         return Reply(tool_calls=[ToolCall(name, args, f"call_{n + i}") for i, (name, args) in enumerate(calls)])
-    return Reply(content=compose(run, req, mode, obey))
+    return Reply(content=follow_prompt_rules(compose(run, req, mode, obey), run, req))

@@ -6,6 +6,8 @@
     GET  /health
     /mock/faults, /mock/stats, /mock/reset   control endpoints (see mock_llm/faults.py)
     /mock/mode                               Day 3 agent mode: injection obey|resist, force_citation (mock_llm/agent.py)
+    GET  /calls                              Day 4: how many chat / embedding requests arrived (also 404s and 5xx),
+                                             in total and per model, so tests can count retries and fallbacks
 
 Models named gemini* behave like Gemini's OpenAI-compatible endpoint with thinking on: every tool call carries
 extra_content.google.thought_signature, and a request whose history has a tool call without it gets a 400.
@@ -29,11 +31,11 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from mock_llm import agent, embeddings, responders, text
+from mock_llm import agent, embeddings, judge, responders, text
 from mock_llm.faults import Fault, FaultQueue, fault_from_headers, merge
 
 REJECT_KEYS = re.compile(os.environ.get("MOCK_REJECT_KEYS", r"wrong|invalid|revoked|expired"), re.I)
-UNKNOWN_MODELS = re.compile(os.environ.get("MOCK_UNKNOWN_MODELS", r"^(no-such|unknown|does-not-exist|nonexistent)"))
+UNKNOWN_MODELS = re.compile(os.environ.get("MOCK_UNKNOWN_MODELS", r"^(no-such|unknown|nonexistent)|does-not-exist"))
 SIGNED_MODELS = re.compile(os.environ.get("MOCK_SIGNED_MODELS", r"^gemini"), re.I)   # thought signatures
 BROKEN_MODELS = re.compile(os.environ.get("MOCK_BROKEN_MODELS", r"^broken"))
 STRICT = os.environ.get("MOCK_STRICT", "0") == "1"
@@ -199,6 +201,7 @@ async def chat_completions(request: Request):
     if err is not None:
         return err
     model = body.get("model")
+    STATS[f"chat_model:{model}"] += 1
     fault = merge(fault_from_headers(request.headers), FAULTS.take("chat", model))
     if (resp := check_model(model)) is not None:
         return resp
@@ -227,7 +230,9 @@ async def chat_completions(request: Request):
         response_format=body.get("response_format"), tools=body.get("tools"), tool_choice=body.get("tool_choice"))
     thinking, hide_thinking = reasoning_requested(body)
     req.reasoning = thinking
-    if agent.is_agent_request(req):
+    if judge.is_judge_request(req):
+        reply = judge.respond(req)
+    elif agent.is_agent_request(req):
         reply = agent.respond(req, fault, mode_for(request.headers))
     else:
         reply = responders.respond(req, fault)
@@ -374,6 +379,13 @@ async def get_faults():
 async def clear_faults():
     FAULTS.clear()
     return {"queued": []}
+
+
+@app.get("/calls")
+async def calls():
+    """Requests that reached the mock, failed ones included: a fallback is 2 calls, two retries 3."""
+    by_model = {k.split(":", 1)[1]: v for k, v in STATS.items() if k.startswith("chat_model:")}
+    return {"calls": STATS["chat_requests"], "embeddings": STATS["embedding_requests"], "by_model": by_model}
 
 
 @app.get("/mock/stats")

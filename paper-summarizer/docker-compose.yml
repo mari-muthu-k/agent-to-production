@@ -3,7 +3,8 @@ name: paper-summarizer
 # Offline vs online: LLM_BASE_URL in .env is the only switch.
 #   http://mock-llm:8000/v1   -> mock-llm (no keys, no cost)
 #   https://<gateway>/v1       -> a real OpenAI-compatible endpoint
-#   http://gateway:4000/v1     -> the local LiteLLM proxy (`make gateway`)
+#   http://gateway:4000/v1     -> the local LiteLLM proxy (`make up`)
+# Day 4 adds the production stack: gateway (LiteLLM proxy) + postgres + redis + api (`make up`, `make api`).
 
 x-dev-image: &dev-image
   build:
@@ -18,6 +19,7 @@ x-proxy-env: &proxy-env
   HTTP_PROXY: ${HTTP_PROXY:-}
   HTTPS_PROXY: ${HTTPS_PROXY:-}
   NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mock-llm,gateway,api,postgres,redis}
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,mock-llm,gateway,api,postgres,redis}
 
 services:
   mock-llm:
@@ -66,8 +68,12 @@ services:
       EMBED_MODEL: mock-embed
       OTHER_EMBED_MODEL: mock-embed-v2   # Day 2, 8.4: a second embedding model with the same vector length
       MOCK_BASE_URL: http://mock-llm:8000
-      NO_PROXY: localhost,127.0.0.1,mock-llm
+      NO_PROXY: localhost,127.0.0.1,mock-llm,gateway,api
       NOTEBOOKS_DIR: /notebooks
+      GATEWAY_URL: http://gateway:4000       # Day 4 demo notebook, make keys / eval / test-gateway
+      API_URL: http://api:8000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
       COURSE_REPO: /course          # Day 2 setup cells copy course files from here instead of GitHub
     volumes:
       - ./:/workspace
@@ -79,15 +85,19 @@ services:
     command: ["pytest", "-q"]
 
   gateway:
-    # LiteLLM proxy. Optional rehearsal service until M3 (Day 4), when it becomes core.
-    image: ghcr.io/berriai/litellm:v1.103.2
-    profiles: ["gateway"]
+    # LiteLLM proxy: core from Day 4. Virtual keys, budgets and spend in Postgres; rate limits and cache in Redis.
+    image: ghcr.io/berriai/litellm:v1.104.2      # the same LiteLLM version as the library pin (requirements.lock)
     env_file:
       - path: .env
         required: false
     environment:
       <<: *proxy-env
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-change-me}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}      # the proxy refuses to start without one
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-}
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm-local}@postgres:5432/litellm
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      STORE_MODEL_IN_DB: "False"
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-http://mock-llm:8000/v1}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-sk-mock-local}
       PROVIDER_MODEL: ${PROVIDER_MODEL:-openai/mock-llm}
@@ -100,11 +110,81 @@ services:
       - "${GATEWAY_PORT:-4000}:4000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3)"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 12
+      retries: 30
       start_period: 20s
     depends_on:
       mock-llm:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:-litellm-local}
+      POSTGRES_DB: litellm
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    # The Day 4 service in production mode: every model call goes through the gateway with the caller's
+    # virtual key (GATEWAY_MODE=proxy), so budgets, rate limits, retries and fallback all live in the proxy.
+    image: paper-summarizer-runtime:latest
+    build:
+      context: .
+      target: runtime
+    environment:
+      <<: *proxy-env
+      GATEWAY_MODE: proxy
+      GATEWAY_URL: http://gateway:4000
+      EMBED_MODEL: ${PROVIDER_EMBED_MODEL:-openai/mock-embed}    # names the embedding cache; calls use "paper-embed"
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1}
+      PRICE_IN_PER_M: ${PRICE_IN_PER_M:-}
+      PRICE_OUT_PER_M: ${PRICE_OUT_PER_M:-}
+      DATA_DIR: /data
+      TRACING: ${TRACING:-console}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    command: ["uvicorn", "paper_agent.service.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - api-data:/data
+    ports:
+      - "${API_PORT:-8200}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  api-data:

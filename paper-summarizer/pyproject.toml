@@ -33,26 +33,36 @@ mock = [                         # mock-llm server (and the Day 4 api service)
     "fastapi",
     "uvicorn",
 ]
+serve = [                        # Day 4: the api service (also in the runtime image)
+    "litellm==1.104.2",          # Router (library mode); the proxy runs as its own image
+    "langchain-litellm==0.11.0",
+    "fastapi==0.142.4",          # ships its own OpenTelemetry request spans (fastapi/telemetry)
+    "uvicorn==0.54.0",
+    "python-multipart==0.0.32",  # UploadFile
+    "httpx==0.28.1",
+    "opentelemetry-sdk==1.45.1",
+    "reportlab==5.0.1",          # Day 4 cell 4.0 draws the TinyCoder PDF
+]
 dev = [
-    "paper-agent[rag,mock,agent]",
+    "paper-agent[rag,mock,agent,serve]",
     "pytest",
     "ruff",
     "openai",       # tests only: proves mock-llm stays OpenAI-compatible (the LiteLLM gateway relies on it)
     "ipykernel",    # a kernel for tools/exec_notebooks.py (no Jupyter server: notebooks run in Colab)
     "nbclient",     # tools/exec_notebooks.py
     "nbformat",
-    "reportlab",    # tools/make_edge_case_pdfs.py
 ]
 
 [tool.setuptools.packages.find]
 include = ["paper_agent*", "mock_llm*"]
 
 [tool.setuptools.package-data]
-paper_agent = ["prompts/*.txt", "fixtures/pdfs/*.pdf", "data/*.json"]
+paper_agent = ["prompts/*.txt", "fixtures/pdfs/*.pdf", "data/*.json", "evals/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not gateway'"      # `make test-gateway` runs the proxy-mode tests (-m gateway)
+markers = ["gateway: needs the LiteLLM proxy stack: gateway + postgres + redis + api (make test-gateway)"]
 
 [tool.ruff]
 line-length = 120

@@ -1,0 +1,199 @@
+{
+  "paper": "TinyCoder (fictional), paper_agent/fixtures/tinycoder_pdf.py",
+  "notes": "set = notebook: the 8 questions of cell 7.1 (6 answerable, 2 refusals). extra: 8 more answerable questions, each tied to one page (page accuracy). refusal: 4 more questions the paper can't answer. `make eval` runs all 20. expected_sections: section ids (paper_agent.agent.papers.section_id) of the chunks that answer it.",
+  "questions": [
+    {
+      "id": "g01",
+      "set": "notebook",
+      "question": "What is TinyCoder's pass@1 compared with the 7B baseline?",
+      "answerable": true,
+      "expected_sections": [
+        "results"
+      ],
+      "expected_page": 3
+    },
+    {
+      "id": "g02",
+      "set": "notebook",
+      "question": "What attention mechanism does TinyCoder use?",
+      "answerable": true,
+      "expected_sections": [
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g03",
+      "set": "notebook",
+      "question": "What are the main limitations of TinyCoder?",
+      "answerable": true,
+      "expected_sections": [
+        "limitations"
+      ],
+      "expected_page": 3
+    },
+    {
+      "id": "g04",
+      "set": "notebook",
+      "question": "How much faster is TinyCoder than the 7B baseline?",
+      "answerable": true,
+      "expected_sections": [
+        "results",
+        "front-matter"
+      ],
+      "expected_page": 3
+    },
+    {
+      "id": "g05",
+      "set": "notebook",
+      "question": "How does TinyCoder do on files longer than 1,024 tokens?",
+      "answerable": true,
+      "expected_sections": [
+        "results"
+      ],
+      "expected_page": 3
+    },
+    {
+      "id": "g06",
+      "set": "notebook",
+      "question": "What data was TinyCoder trained on?",
+      "answerable": true,
+      "expected_sections": [
+        "methods",
+        "training-and-evaluation"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g07",
+      "set": "notebook",
+      "question": "Who funded the TinyCoder project?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    },
+    {
+      "id": "g08",
+      "set": "notebook",
+      "question": "What learning rate was used to train TinyCoder?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    },
+    {
+      "id": "g09",
+      "set": "extra",
+      "question": "How many layers does TinyCoder have?",
+      "answerable": true,
+      "expected_sections": [
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g10",
+      "set": "extra",
+      "question": "How big is TinyCoder's attention window?",
+      "answerable": true,
+      "expected_sections": [
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g11",
+      "set": "extra",
+      "question": "How many GPUs were used to train TinyCoder, and for how long?",
+      "answerable": true,
+      "expected_sections": [
+        "methods",
+        "training-and-evaluation"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g12",
+      "set": "extra",
+      "question": "How was TinyCoder evaluated?",
+      "answerable": true,
+      "expected_sections": [
+        "training-and-evaluation",
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g13",
+      "set": "extra",
+      "question": "What does pass@1 mean in this paper?",
+      "answerable": true,
+      "expected_sections": [
+        "training-and-evaluation",
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g14",
+      "set": "extra",
+      "question": "Was TinyCoder evaluated on JavaScript or Java?",
+      "answerable": true,
+      "expected_sections": [
+        "limitations"
+      ],
+      "expected_page": 3
+    },
+    {
+      "id": "g15",
+      "set": "extra",
+      "question": "What problem with large code models does the introduction describe?",
+      "answerable": true,
+      "expected_sections": [
+        "introduction"
+      ],
+      "expected_page": 1
+    },
+    {
+      "id": "g16",
+      "set": "extra",
+      "question": "Why did the authors choose sliding-window attention?",
+      "answerable": true,
+      "expected_sections": [
+        "methods"
+      ],
+      "expected_page": 2
+    },
+    {
+      "id": "g17",
+      "set": "refusal",
+      "question": "What optimizer and batch size were used?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    },
+    {
+      "id": "g18",
+      "set": "refusal",
+      "question": "Which university are the authors from?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    },
+    {
+      "id": "g19",
+      "set": "refusal",
+      "question": "How much electricity did training TinyCoder consume?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    },
+    {
+      "id": "g20",
+      "set": "refusal",
+      "question": "Which cloud provider hosted the training?",
+      "answerable": false,
+      "expected_sections": [],
+      "expected_page": null
+    }
+  ]
+}

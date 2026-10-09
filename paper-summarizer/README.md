@@ -13,6 +13,7 @@ course repo root in `notebooks/dayN/`: `Practice.ipynb` (participants, run with 
 |---|---|---|
 | 1 | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day1/Practice.ipynb) | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day1/Demo.ipynb) |
 | 2 | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day2/Practice.ipynb) | [Open in Colab](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day2/Demo.ipynb) |
+| 4 | [Day4_CodeAlong](https://colab.research.google.com/github/mari-muthu-k/agent-to-production/blob/main/notebooks/day4/Day4_CodeAlong.ipynb) | `Day4_Instructor_Demo.ipynb`: run locally against the Docker stack (below) |
 
 (The links work once the notebooks are pushed to `main` on GitHub. Before that, use File → Upload
 notebook in Colab.)
@@ -21,7 +22,7 @@ This Docker setup has no Jupyter server. It exists to keep the notebooks and pac
 offline tests, executing every notebook headlessly against a mock model, probing your gateway,
 and rehearsing the LiteLLM gateway. **Participants never need it.**
 
-Status: **M1** (Day 2: from PDF to cited answers). Days 3 and 4 land in M2 and M3.
+Status: **M3** (Day 4: serve, control, observe, evaluate). M4 is polish.
 
 The Day 2 notebooks do **not** install this package in Colab. Cell 4.0 installs three pinned libraries
 (`pypdf`, `chromadb`, `langchain-text-splitters`) and downloads `llm_client.py`, `tinycoder.pdf`, the 4.3b
@@ -41,16 +42,44 @@ make exec-notebooks       # runs every notebook against mock-llm, the way Colab 
 
 | Command | What it does |
 |---|---|
-| `make up` / `make down` | Start / stop `mock-llm` (and anything else running) |
+| `make up` / `make down` | Start / stop the Day 4 stack: `mock-llm`, `gateway` (LiteLLM proxy), `postgres`, `redis`, `api` |
+| `make api` | Start the api (`http://localhost:8200`, `GATEWAY_MODE=proxy`) and the gateway it needs |
+| `make keys` | Demo virtual keys for alice, bob and eval-bot on the gateway → `keys.local.json` (gitignored) |
+| `make eval` / `make eval-baseline` | The 20-question golden set through the api; `eval` exits 1 on a regression vs `paper_agent/evals/baseline.json` (`PROMPT_VERSION=v2 make eval` is blocked) |
 | `make test` | `pytest` against `mock-llm`. No API keys needed |
+| `make test-gateway` | Proxy-mode tests (keys, budgets, rate limits) against the running stack, still offline |
 | `make lint` | `ruff check` |
 | `make mock` | Start only the mock on `http://localhost:8100` |
-| `make gateway` | Start the LiteLLM proxy on `http://localhost:4000` (rehearsal profile) |
+| `make gateway` | Start the LiteLLM proxy (with Postgres and Redis) on `http://localhost:4000` |
 | `make notebooks DAYS=3` | Regenerate the named days' notebooks from `notebook_templates/` (Day 1 is never touched) |
-| `make exec-notebooks` | Execute every notebook against `mock-llm`; fail on any unexpected error |
+| `make exec-notebooks` | Execute every notebook against `mock-llm` (the Day 4 demo against the whole stack); fail on any unexpected error. Also writes the Day 4 executed backup to `notebooks/day4/executed/` (gitignored) |
 | `make check-gateway` | Probe the endpoint in `.env` for supported features |
 | `make lock` | Re-resolve the pinned `requirements*.lock` files |
 | `make clean` | Remove containers, local images and generated files |
+
+## Day 4: the service, the gateway, the stack
+
+`paper_agent/service/` is the Day 3 agent as a FastAPI service; `paper_agent/evals/` is the golden set, the
+scorers and the regression gate. One switch, `GATEWAY_MODE`, decides where LiteLLM runs:
+
+| | `library` (Colab, tests, notebooks) | `proxy` (the `api` service) |
+|---|---|---|
+| Model calls | `litellm.Router` in the process (`ChatLiteLLMRouter`) | the `gateway` service, with the **caller's virtual key** |
+| Budget per user | our `@before_model` `budget_guard` + `SPEND` in memory | the key's `max_budget` / `budget_duration` (Postgres) |
+| Rate limit | an in-process counter per user | the key's `rpm_limit` (Redis) |
+| Retries, timeout, fallback | Router settings | the same settings in `gateway/litellm_config.yaml` |
+
+The proxy's errors come back as the same friendly 429 bodies as library mode. A proxy started without a
+database does **not** enforce end-user budgets (checked on 1.104.2), which is why Colab uses library mode.
+
+```bash
+make up && make keys          # the stack, then keys for alice / bob / eval-bot (keys.local.json)
+curl -s localhost:8200/health
+make eval                     # the gate as CI runs it;  PROMPT_VERSION=v2 make eval  -> exit 1
+```
+
+`.env.example` carries a generated **placeholder** `LITELLM_MASTER_KEY`: make your own
+(`echo sk-$(openssl rand -hex 32)`). Instructor notes: `docs/instructor_notes_day4.md`.
 
 ## Offline vs online mode
 

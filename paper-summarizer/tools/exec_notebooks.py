@@ -6,7 +6,8 @@ For each Practice (code-along) notebook, three kinds of run, each in a fresh ker
   catch-up   one run per ⏩ CATCH-UP cell: that cell, then everything after it (solved): zero errors
 Demo (instructor) notebooks get one plain run: zero errors.
 
-Executed copies are written to build/executed/ for inspection.
+Executed copies are written to build/executed/ for inspection. The solved Day 4 code-along is also saved as
+notebooks/day4/executed/Day4_CodeAlong_solved.ipynb: the guide's "executed backup" (gitignored: mock outputs).
 
     python tools/exec_notebooks.py                 # all notebooks
     python tools/exec_notebooks.py day1            # only notebooks under notebooks/day1
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOKS = Path(os.environ.get("NOTEBOOKS_DIR") or ROOT.parent / "notebooks")   # <repo>/notebooks
 OUT = ROOT / "build" / "executed"
 TIMEOUT_S = int(os.environ.get("NB_CELL_TIMEOUT", "180"))
+BACKUPS = {"day4/Day4_CodeAlong.ipynb": "day4/executed/Day4_CodeAlong_solved.ipynb"}
 
 
 @dataclass
@@ -158,6 +160,9 @@ def run_notebook(rel: str) -> list:
 
     def solved():
         executed, errors = execute(copy.deepcopy(solved_nb), f"{rel.replace('/', '-')[:-6]}-solved", rel)
+        if rel in BACKUPS and not errors:
+            (NOTEBOOKS / BACKUPS[rel]).parent.mkdir(parents=True, exist_ok=True)
+            nbformat.write(executed, NOTEBOOKS / BACKUPS[rel])
         text = printed(executed)
         missing = [m for m in must_print if m not in text]
         if errors or missing or "❌ TODO" in text or "was not caught" in text:
@@ -183,7 +188,7 @@ def run_notebook(rel: str) -> list:
 def main(argv) -> int:
     only = argv[1] if len(argv) > 1 else ""
     paths = sorted(p.relative_to(NOTEBOOKS).as_posix() for p in NOTEBOOKS.rglob("*.ipynb")
-                   if ".ipynb_checkpoints" not in p.parts)
+                   if ".ipynb_checkpoints" not in p.parts and "executed" not in p.parts)
     paths = [p for p in paths if p.startswith(only)]
     print(f"LLM_BASE_URL={os.environ.get('LLM_BASE_URL')}  LLM_MODEL={os.environ.get('LLM_MODEL')}")
     if "mock-llm" not in (os.environ.get("LLM_BASE_URL") or ""):

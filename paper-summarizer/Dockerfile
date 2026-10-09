@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # One Dockerfile, two targets:
-#   runtime  small image for mock-llm (and the api service from Day 4)
+#   runtime  mock-llm, and the Day 4 api service (FastAPI + LiteLLM + Chroma)
 #   dev      runtime + pytest, ruff, ipykernel/nbclient (headless notebook runs); package installed editable
 # There is no Jupyter server: notebooks are run in Google Colab.
 # Multi-arch: python:3.11-slim publishes linux/amd64 and linux/arm64, and every locked
@@ -51,6 +51,8 @@ COPY --chown=app:app pyproject.toml ./
 COPY --chown=app:app paper_agent ./paper_agent
 COPY --chown=app:app mock_llm ./mock_llm
 ENV PYTHONPATH=/app
+# The api service keeps uploaded papers and its index here (a named volume inherits this owner).
+RUN mkdir -p /data && chown app:app /data
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "mock_llm.server:app", "--host", "0.0.0.0", "--port", "8000"]
